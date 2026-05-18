@@ -1,0 +1,234 @@
+(define-module (canary term render)
+  #:use-module (canary term types)
+  #:export (term-render-line
+            term-render-region
+            term-dump
+            term-dump-row
+            term-render-ansi-line
+            face->plist
+            face->ansi-codes
+            emit-sgr-string
+            term-diff->ansi))
+
+(define (printable ch)
+  (let ((code (char->integer ch)))
+    (cond
+     ((< code 32) #\space)
+     ((= code 127) #\space)
+     (else ch))))
+
+(define (face->plist face)
+  (and face
+       (let ((p '()))
+         (when (face-bold? face)    (set! p (cons* 'bold #t p)))
+         (when (face-faint? face)   (set! p (cons* 'faint #t p)))
+         (when (face-italic? face)  (set! p (cons* 'italic #t p)))
+         (when (face-underline face) (set! p (cons* 'underline #t p)))
+         (when (face-crossed? face) (set! p (cons* 'strike-through #t p)))
+         (when (face-inverse? face) (set! p (cons* 'inverse #t p)))
+         (let ((fg (face-fg face))
+               (bg (face-bg face)))
+           (when (face-inverse? face)
+             (let ((tmp fg)) (set! fg bg) (set! bg tmp)))
+           (when (face-conceal? face)
+             (set! fg bg))
+           (when fg (set! p (cons* 'fg fg p)))
+           (when bg (set! p (cons* 'bg bg p))))
+         p)))
+
+(define (term-render-line t y . maybe-buf)
+  (let* ((w (term-width t))
+         (row (term-grid-row t y))
+         (chars (if (and (pair? maybe-buf)
+                         (string? (car maybe-buf))
+                         (= (string-length (car maybe-buf)) w))
+                    (car maybe-buf)
+                    (make-string w #\space)))
+         (changes '())
+         (prev-face #f)
+         (first #t))
+    (do ((x 0 (+ x 1)))
+        ((= x w))
+      (let* ((cell (vector-ref row x))
+             (ch (cell-char cell))
+             (face (cell-face cell)))
+        (string-set! chars x (printable ch))
+        (when (or first (not (face-attrs-equal? face prev-face)))
+          (set! changes (cons (list x (face->plist face)) changes))
+          (set! prev-face face)
+          (set! first #f))))
+    (values chars (reverse changes))))
+
+(define (term-render-region t origin)
+  (let ((col0 (car origin))
+        (row0 (cadr origin))
+        (h (term-height t))
+        (cmds '()))
+    (do ((y 0 (+ y 1)))
+        ((= y h))
+      (call-with-values
+       (lambda () (term-render-line t y))
+       (lambda (chars changes)
+         (let loop ((cs changes))
+           (cond
+            ((null? cs) #f)
+            (else
+             (let* ((entry (car cs))
+                    (start (car entry))
+                    (face-pl (cadr entry))
+                    (next-start
+                     (cond
+                      ((null? (cdr cs)) (term-width t))
+                      (else (car (cadr cs)))))
+                    (segment (substring chars start next-start)))
+               (set! cmds
+                     (cons (list 'text (+ col0 start) (+ row0 y)
+                                 segment face-pl)
+                           cmds))
+               (loop (cdr cs)))))))))
+    (when (term-cursor-visible? t)
+      (set! cmds
+            (cons (list 'cursor
+                        (+ col0 (term-cursor-x t))
+                        (+ row0 (term-cursor-y t))
+                        (cursor-style->draw (term-cursor-style t)))
+                  cmds)))
+    (reverse cmds)))
+
+(define (cursor-style->draw style)
+  (case style
+    ((block blinking-block) 'block)
+    ((underline blinking-underline) 'underline)
+    ((bar blinking-bar) 'bar)
+    (else 'block)))
+
+(define (term-dump-row t y)
+  (let* ((row (term-grid-row t y))
+         (w (vector-length row))
+         (s (make-string w #\space)))
+    (do ((x 0 (+ x 1)))
+        ((= x w) s)
+      (string-set! s x (cell-char (vector-ref row x))))))
+
+(define (term-dump t)
+  (let ((h (term-height t))
+        (out (open-output-string)))
+    (do ((y 0 (+ y 1)))
+        ((= y h))
+      (display (term-dump-row t y) out)
+      (when (< y (- h 1))
+        (newline out)))
+    (get-output-string out)))
+
+(define (face->ansi-codes face)
+  (cond
+   ((not face) '("0"))
+   (else
+    (let ((codes '()))
+      (when (face-bold? face)    (set! codes (cons "1" codes)))
+      (when (face-faint? face)   (set! codes (cons "2" codes)))
+      (when (face-italic? face)  (set! codes (cons "3" codes)))
+      (when (face-underline face) (set! codes (cons "4" codes)))
+      (when (face-inverse? face) (set! codes (cons "7" codes)))
+      (when (face-crossed? face) (set! codes (cons "9" codes)))
+      (let ((fg (if (face-inverse? face) (face-bg face) (face-fg face)))
+            (bg (if (face-inverse? face) (face-fg face) (face-bg face))))
+        (when (face-conceal? face) (set! fg bg))
+        (when fg (set! codes (cons (color-code fg 38) codes)))
+        (when bg (set! codes (cons (color-code bg 48) codes))))
+      (if (null? codes) '("0") (reverse codes))))))
+
+(define (color-code color base)
+  (cond
+   ((and (integer? color) (>= color 0) (<= color 7))
+    (number->string (+ (- base 8) color)))
+   ((and (integer? color) (>= color 8) (<= color 15))
+    (number->string (+ (if (= base 38) 90 100) (- color 8))))
+   ((and (integer? color) (>= color 0) (<= color 255))
+    (string-append (number->string base) ";5;" (number->string color)))
+   ((and (list? color) (= (length color) 3))
+    (string-append (number->string base)
+                   ";2;"
+                   (number->string (car color)) ";"
+                   (number->string (cadr color)) ";"
+                   (number->string (caddr color))))
+   (else (number->string (+ base 1)))))
+
+(define (emit-sgr-string face)
+  (string-append (string #\esc) "["
+                 (let join ((codes (face->ansi-codes face)))
+                   (cond
+                    ((null? codes) "")
+                    ((null? (cdr codes)) (car codes))
+                    (else (string-append (car codes) ";"
+                                         (join (cdr codes))))))
+                 "m"))
+
+(define (term-render-ansi-line t y)
+  (let* ((w (term-width t))
+         (row (term-grid-row t y))
+         (out (open-output-string))
+         (prev-face #f)
+         (first #t))
+    (do ((x 0 (+ x 1)))
+        ((= x w))
+      (let* ((cell (vector-ref row x))
+             (ch (cell-char cell))
+             (face (cell-face cell)))
+        (when (or first (not (face-attrs-equal? face prev-face)))
+          (display (emit-sgr-string face) out)
+          (set! prev-face face)
+          (set! first #f))
+        (display (printable ch) out)))
+    (display (string-append (string #\esc) "[0m") out)
+    (get-output-string out)))
+
+(define (move-to-ansi col row)
+  (string-append (string #\esc) "["
+                 (number->string (+ row 1)) ";"
+                 (number->string (+ col 1)) "H"))
+
+(define (cell-equal? a b)
+  (and a b
+       (eqv? (cell-char a) (cell-char b))
+       (face-attrs-equal? (cell-face a) (cell-face b))))
+
+(define (compatible-prev-row prev cur-w y)
+  (and prev
+       (= (term-width prev) cur-w)
+       (< y (term-height prev))
+       (term-grid-row prev y)))
+
+(define (term-diff->ansi prev cur)
+  (let ((w (term-width cur))
+        (h (term-height cur))
+        (out (open-output-string))
+        (cursor-x #f)
+        (cursor-y #f)
+        (last-face #f)
+        (any-emitted? #f))
+    (do ((y 0 (+ y 1)))
+        ((= y h))
+      (let ((row (term-grid-row cur y))
+            (prev-row (compatible-prev-row prev w y)))
+        (do ((x 0 (+ x 1)))
+            ((= x w))
+          (let ((cell (vector-ref row x))
+                (prev-cell (and prev-row (vector-ref prev-row x))))
+            (unless (cell-equal? cell prev-cell)
+              (unless (and (eqv? cursor-x x) (eqv? cursor-y y))
+                (display (move-to-ansi x y) out)
+                (set! cursor-x x)
+                (set! cursor-y y))
+              (let ((face (cell-face cell)))
+                (unless (face-attrs-equal? face last-face)
+                  (display (emit-sgr-string face) out)
+                  (set! last-face face)))
+              (display (printable (cell-char cell)) out)
+              (set! cursor-x (+ x 1))
+              (set! any-emitted? #t))))))
+    (when any-emitted?
+      (display (string-append (string #\esc) "[0m") out))
+    (when (term-cursor-visible? cur)
+      (display (move-to-ansi (term-cursor-x cur) (term-cursor-y cur)) out))
+    (get-output-string out)))

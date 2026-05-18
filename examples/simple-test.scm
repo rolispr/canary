@@ -4,14 +4,14 @@
 (add-to-load-path (dirname (dirname (current-filename))))
 (add-to-load-path "/opt/homebrew/share/guile/site/3.0")
 
-(use-modules (tuition terminal)
-             (tuition style)
-             (tuition protocol)
-             (tuition app)
-             (tuition layout)
-             (tuition borders)
-             (tuition table)
-             (tuition components progress)
+(use-modules (canary terminal)
+             (canary style)
+             (canary protocol)
+             (canary app)
+             (canary layout)
+             (canary borders)
+             (canary table)
+             (canary components progress)
              (oop goops))
 
 ;;; Model

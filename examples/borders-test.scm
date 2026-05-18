@@ -4,15 +4,15 @@
 (add-to-load-path (dirname (dirname (current-filename))))
 (add-to-load-path "/opt/homebrew/share/guile/site/3.0")
 
-(use-modules (tuition terminal)
-             (tuition style)
-             (tuition protocol)
-             (tuition app)
-             (tuition layout)
-             (tuition borders)
-             (tuition table)
-             (tuition components progress)
-             (tuition components spinner)
+(use-modules (canary terminal)
+             (canary style)
+             (canary protocol)
+             (canary app)
+             (canary layout)
+             (canary borders)
+             (canary table)
+             (canary components progress)
+             (canary components spinner)
              (ice-9 match)
              (oop goops))
 
@@ -51,7 +51,7 @@
 ;;; View
 (define (view m)
   (vbox
-   (boxed "guile-tuition components test" #:border border-double #:fg 4)
+   (boxed "guile-canary components test" #:border border-double #:fg 4)
    (spacer 1)
 
    (txt "Borders:" #:bold? #t)
