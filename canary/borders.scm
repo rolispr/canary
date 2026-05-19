@@ -46,5 +46,5 @@
 (define border-ascii
   (make-border "-" "-" "|" "|" "+" "+" "+" "+"))
 
-(define* (boxed child #:key (border border-normal) (face 'default))
+(define* (boxed child #:key (border border-normal) (face #f))
   (make-boxed-node child border face))

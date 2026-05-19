@@ -13,12 +13,6 @@
      ((<= n max-w) s)
      (else (substring s 0 max-w)))))
 
-(define (pad-to s w)
-  (let ((n (string-length s)))
-    (cond
-     ((>= n w) (substring s 0 w))
-     (else (string-append s (make-string (- w n) #\space))))))
-
 (define (render node cols rows)
   (view->cmds node (make-rect 0 0 cols rows)))
 
@@ -46,9 +40,9 @@
                        (+ (rect-row rect) (cursor-node-row node))
                        (cursor-node-style node))))
    ((vbox-node? node)
-    (render-vbox (vbox-node-children node) rect))
+    (render-vbox node rect))
    ((hbox-node? node)
-    (render-hbox (hbox-node-children node) rect))
+    (render-hbox node rect))
    ((boxed-node? node)
     (render-boxed node rect))
    ((pad-node? node)
@@ -62,46 +56,69 @@
    ((overlay-node? node)
     (append (view->cmds (overlay-node-base node) rect)
             (append-map
-             (lambda (entry)
-               (let ((col (car entry))
-                     (row (cadr entry))
-                     (child (caddr entry)))
-                 (let* ((s (view-size child))
-                        (cw (min (car s) (- (rect-w rect)
-                                            (- col (rect-col rect)))))
-                        (ch (min (cdr s) (- (rect-h rect)
-                                            (- row (rect-row rect))))))
-                   (view->cmds child (make-rect col row cw ch)))))
+             (lambda (p)
+               (let* ((col   (placement-col p))
+                      (row   (placement-row p))
+                      (child (placement-child p))
+                      (s (view-size child))
+                      (cw (min (car s) (- (rect-w rect)
+                                          (- col (rect-col rect)))))
+                      (ch (min (cdr s) (- (rect-h rect)
+                                          (- row (rect-row rect))))))
+                 (view->cmds child (make-rect col row cw ch))))
              (overlay-node-overlays node))))
+   ((static-node? node)
+    (let ((cached (static-node-cached-rect node)))
+      (if (and cached (rect=? cached rect))
+          (static-node-cached-cmds node)
+          (let ((cmds (view->cmds (static-node-child node) rect)))
+            (set-static-node-cached-rect! node rect)
+            (set-static-node-cached-cmds! node cmds)
+            cmds))))
    (else '())))
 
-(define (render-vbox children rect)
-  (let loop ((cs children) (row (rect-row rect)) (remaining (rect-h rect)) (acc '()))
-    (cond
-     ((or (null? cs) (<= remaining 0)) (reverse acc))
-     (else
-      (let* ((child (car cs))
-             (s (view-size child))
-             (cw (min (car s) (rect-w rect)))
-             (ch (min (cdr s) remaining))
-             (sub (make-rect (rect-col rect) row cw ch))
-             (cmds (view->cmds child sub)))
-        (loop (cdr cs) (+ row ch) (- remaining ch)
-              (append (reverse cmds) acc)))))))
+(define (bg-fill-cmds face rect)
+  (if face
+      (list (make-fill (rect-col rect) (rect-row rect)
+                       (rect-w rect) (rect-h rect)
+                       face))
+      '()))
 
-(define (render-hbox children rect)
-  (let loop ((cs children) (col (rect-col rect)) (remaining (rect-w rect)) (acc '()))
-    (cond
-     ((or (null? cs) (<= remaining 0)) (reverse acc))
-     (else
-      (let* ((child (car cs))
-             (s (view-size child))
-             (cw (min (car s) remaining))
-             (ch (min (cdr s) (rect-h rect)))
-             (sub (make-rect col (rect-row rect) cw ch))
-             (cmds (view->cmds child sub)))
-        (loop (cdr cs) (+ col cw) (- remaining cw)
-              (append (reverse cmds) acc)))))))
+(define (render-vbox node rect)
+  (let ((face (vbox-node-face node))
+        (children (vbox-node-children node)))
+    (append
+     (bg-fill-cmds face rect)
+     (let loop ((cs children) (row (rect-row rect)) (remaining (rect-h rect)) (acc '()))
+       (cond
+        ((or (null? cs) (<= remaining 0)) (reverse acc))
+        (else
+         (let* ((child (car cs))
+                (s (view-size child))
+                (cw (min (car s) (rect-w rect)))
+                (ch (min (cdr s) remaining))
+                (sub (make-rect (rect-col rect) row cw ch))
+                (cmds (view->cmds child sub)))
+           (loop (cdr cs) (+ row ch) (- remaining ch)
+                 (append (reverse cmds) acc)))))))))
+
+(define (render-hbox node rect)
+  (let ((face (hbox-node-face node))
+        (children (hbox-node-children node)))
+    (append
+     (bg-fill-cmds face rect)
+     (let loop ((cs children) (col (rect-col rect)) (remaining (rect-w rect)) (acc '()))
+       (cond
+        ((or (null? cs) (<= remaining 0)) (reverse acc))
+        (else
+         (let* ((child (car cs))
+                (s (view-size child))
+                (cw (min (car s) remaining))
+                (ch (min (cdr s) (rect-h rect)))
+                (sub (make-rect col (rect-row rect) cw ch))
+                (cmds (view->cmds child sub)))
+           (loop (cdr cs) (+ col cw) (- remaining cw)
+                 (append (reverse cmds) acc)))))))))
 
 (define (render-boxed node rect)
   (cond
@@ -119,6 +136,7 @@
            (top-mid (make-string inner-w (string-ref (border-top border) 0)))
            (bot-mid (make-string inner-w (string-ref (border-bottom border) 0))))
       (append
+       (bg-fill-cmds face rect)
        (list (make-text col row
                         (string-append (border-tl border) top-mid (border-tr border))
                         face '()))
@@ -144,7 +162,8 @@
                            (+ (rect-row rect) t)
                            (max 0 (- (rect-w rect) l r))
                            (max 0 (- (rect-h rect) t b)))))
-    (view->cmds (pad-node-child node) inner)))
+    (append (bg-fill-cmds (pad-node-face node) rect)
+            (view->cmds (pad-node-child node) inner))))
 
 (define (render-align node rect)
   (let* ((child (align-node-child node))
