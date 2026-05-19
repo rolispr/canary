@@ -1,5 +1,7 @@
 (define-module (canary text)
-  #:export (visible-length))
+  #:export (nl visible-length))
+
+(define nl "\n")
 
 (define (visible-length str)
   (string-length str))

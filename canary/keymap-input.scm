@@ -2,19 +2,13 @@
   #:use-module (canary chord)
   #:use-module (canary keymap)
   #:use-module (canary protocol)
-  #:use-module (oop goops)
-  #:export (key-msg->chord
-            feed-key-msg))
+  #:export (key->chord
+            feed-key))
 
-(define (key-msg->chord km)
-  (let ((mods '()))
-    (when (alt km)  (set! mods (cons 'meta mods)))
-    (when (ctrl km) (set! mods (cons 'control mods)))
-    (make-chord (key km) mods)))
+(define (key->chord k)
+  (make-chord (key-char k) (key-mods k)))
 
-(define (feed-key-msg keymap msg)
-  (cond
-   ((not (is-a? msg <key-msg>)) (values #f keymap))
-   (else
-    (let ((c (key-msg->chord msg)))
-      (keymap-step keymap c)))))
+(define (feed-key keymap msg)
+  (if (key? msg)
+      (keymap-step keymap (key->chord msg))
+      (values #f keymap)))

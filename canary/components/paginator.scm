@@ -102,8 +102,8 @@
 (define (paginator-update paginator msg)
   "Update paginator with message"
   (cond
-   ((is-a? msg <key-msg>)
-    (let ((k (key msg)))
+   ((key? msg)
+    (let ((k (key-char msg)))
       (match k
         ((or 'right 'page-down)
          (paginator-next-page! paginator)
@@ -126,7 +126,7 @@
    (else (values paginator #f))))
 
 ;;; Component protocol
-(define-method (component-update (paginator <paginator>) msg)
+(define-method (react (paginator <paginator>) msg)
   "Handle messages via component protocol"
   (paginator-update paginator msg))
 

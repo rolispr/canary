@@ -1,4 +1,5 @@
 (define-module (canary terminal)
+  #:use-module (canary protocol)
   #:use-module (system foreign)
   #:use-module (rnrs bytevectors)
   #:use-module (ice-9 binary-ports)
@@ -19,6 +20,7 @@
             disable-mouse
             with-raw-terminal
             setup-signal-handlers
+            setup-resize-handler
             key-ready?
             read-key))
 
@@ -136,7 +138,6 @@
   (force-output))
 
 (define (get-terminal-size)
-  "Get terminal size as (cols . rows)"
   (or (catch #t
         (lambda ()
           (let ((ws (make-bytevector 8 0)))
@@ -144,21 +145,21 @@
                  (let ((rows (bytevector-u16-native-ref ws 0))
                        (cols (bytevector-u16-native-ref ws 2)))
                    (and (positive? rows) (positive? cols)
-                        (cons cols rows))))))
+                        (size cols rows))))))
         (lambda _ #f))
       (catch #t
         (lambda ()
-          (let* ((port (open-input-pipe "sh -c 'stty size < /dev/tty'"))
+          (let* ((port   (open-input-pipe "sh -c 'stty size < /dev/tty'"))
                  (output (read-line port)))
             (close-pipe port)
             (if (eof-object? output)
-                (cons 80 24)
+                (size 80 24)
                 (let ((parts (string-split output #\space)))
                   (if (= 2 (length parts))
-                      (cons (string->number (cadr parts))
+                      (size (string->number (cadr parts))
                             (string->number (car parts)))
-                      (cons 80 24))))))
-        (lambda _ (cons 80 24)))))
+                      (size 80 24))))))
+        (lambda _ (size 80 24)))))
 
 (define-syntax-rule (with-raw-terminal body ...)
   (dynamic-wind
@@ -181,6 +182,10 @@
     (lambda (sig)
       (cleanup-thunk)
       (primitive-exit 0))))
+
+(define (setup-resize-handler thunk)
+  "Install a SIGWINCH handler that calls THUNK on terminal resize."
+  (sigaction SIGWINCH (lambda (sig) (thunk))))
 
 (define (key-ready?)
   "Check if a key is ready to be read from stdin"

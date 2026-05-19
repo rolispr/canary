@@ -226,7 +226,7 @@
   "Update textarea with message"
   (cond
    ;; Mouse click - position cursor
-   ((and (is-a? msg <mouse-msg>) (eq? (action msg) 'press))
+   ((and (mouse? msg) (eq? (mouse-action msg) 'press))
     (let* ((zone-id (textarea-zone-id textarea))
            (zone (and zone-id (zone-get zone-id))))
       (if zone
@@ -234,8 +234,8 @@
           (receive (zone-start-x zone-start-y zone-end-x zone-end-y)
               (zone-coords zone)
             (let* ((prompt-len (visible-length (textarea-prompt textarea)))
-                   (click-x (x msg))
-                   (click-y (y msg))
+                   (click-x (mouse-x msg))
+                   (click-y (mouse-y msg))
                    (rel-y (- click-y zone-start-y))
                    (lines (textarea-lines textarea))
                    (num-lines (vector-length lines))
@@ -256,8 +256,8 @@
     (values textarea #f))
 
    ;; Key messages
-   ((is-a? msg <key-msg>)
-        (let ((k (key msg)))
+   ((key? msg)
+        (let ((k (key-char msg)))
           (match k
             ('up
              (when (> (textarea-row textarea) 0)
@@ -322,7 +322,7 @@
    (else (values textarea #f))))
 
 ;;; Component protocol
-(define-method (component-update (textarea <textarea>) msg)
+(define-method (react (textarea <textarea>) msg)
   "Handle messages via component protocol"
   (textarea-update textarea msg))
 

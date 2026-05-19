@@ -93,14 +93,15 @@
   "Update canvas with message"
   (cond
    ;; Mouse click or drag - paint
-   ((and (is-a? msg <mouse-msg>)
-         (or (eq? (action msg) 'press) (eq? (action msg) 'drag)))
+   ((and (mouse? msg)
+         (or (eq? (mouse-action msg) 'press)
+             (eq? (mouse-action msg) 'drag)))
     (let* ((zone-id (canvas-zone-id canvas))
            (zone (and zone-id (zone-get zone-id))))
       (if (and zone (zone-in-bounds? zone msg))
           (receive (zx zy zex zey) (zone-coords zone)
-            (let* ((grid-x (- (x msg) zx))
-                   (grid-y (- (y msg) zy)))
+            (let* ((grid-x (- (mouse-x msg) zx))
+                   (grid-y (- (mouse-y msg) zy)))
               (if (and (>= grid-x 0) (< grid-x (canvas-width canvas))
                        (>= grid-y 0) (< grid-y (canvas-height canvas)))
                   (begin
@@ -116,8 +117,8 @@
     (values canvas #f))
 
    ;; Key messages
-   ((is-a? msg <key-msg>)
-    (let ((k (key msg)))
+   ((key? msg)
+    (let ((k (key-char msg)))
       (match k
         ('up
          (when (> (canvas-cursor-y canvas) 0)
@@ -154,7 +155,7 @@
    (else (values canvas #f))))
 
 ;;; Component protocol
-(define-method (component-update (canvas <canvas>) msg)
+(define-method (react (canvas <canvas>) msg)
   "Handle messages via component protocol"
   (canvas-update canvas msg))
 

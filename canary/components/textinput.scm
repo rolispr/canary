@@ -36,18 +36,18 @@
   (set! (textinput-cursor ti) (string-length v))
   ti)
 
-(define-method (component-update (ti <textinput>) msg)
+(define-method (react (ti <textinput>) msg)
   (cond
-   ((and (is-a? msg <mouse-msg>) (eq? (action msg) 'press))
+   ((and (mouse? msg) (eq? (mouse-action msg) 'press))
     (let* ((pl (string-length (textinput-prompt ti)))
-           (rel (max 0 (- (x msg) pl)))
+           (rel (max 0 (- (mouse-x msg) pl)))
            (new-pos (min rel (string-length (textinput-value ti)))))
       (set! (textinput-cursor ti) new-pos)
       (values ti #t)))
-   ((not (is-a? msg <key-msg>))
+   ((not (key? msg))
     (values ti #f))
    (else
-    (let ((k (key msg))
+    (let ((k (key-char msg))
           (val (textinput-value ti))
           (cur (textinput-cursor ti))
           (limit (textinput-char-limit ti)))

@@ -6,11 +6,12 @@
   #:use-module (srfi srfi-9)
   #:use-module (srfi srfi-69)
   #:use-module (ice-9 regex)
-  #:export (zone-manager
+  #:export (zone-manager?
             make-zone-manager
             zone-mark
             zone-scan
             zone-get
+            zone-coords
             zone-in-bounds?
             zone-clear
             *zone-manager*))
@@ -172,12 +173,19 @@
   (when *zone-manager*
     (hash-table-delete! (zone-manager-zones *zone-manager*) id)))
 
+(define (zone-coords zone)
+  "Return (values start-x start-y end-x end-y) for ZONE."
+  (values (zone-info-start-x zone)
+          (zone-info-start-y zone)
+          (zone-info-end-x zone)
+          (zone-info-end-y zone)))
+
 (define (zone-in-bounds? zone mouse-event)
   "Check if mouse event is within zone bounds"
   (and zone
        mouse-event
-       (let ((mx (x mouse-event))
-             (my (y mouse-event)))
+       (let ((mx (mouse-x mouse-event))
+             (my (mouse-y mouse-event)))
          (and (>= mx (zone-info-start-x zone))
               (>= my (zone-info-start-y zone))
               (<= mx (zone-info-end-x zone))
