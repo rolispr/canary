@@ -155,7 +155,10 @@
 
 (define (ensure-term-size! b w h)
   "Ensure the backend's cur and prev terms exist at WxH. Resize or
-allocate as needed. Returns nothing — mutates the backend."
+allocate as needed. On resize, also clears the physical terminal so
+diff-emitted cells overwrite a known blank state — without this the
+old frame's bytes at coordinates the new frame doesn't paint remain
+on screen as ghosts."
   (let ((cur  (ansi-backend-cur-term b))
         (prev (ansi-backend-prev-term b)))
     (cond
@@ -164,9 +167,11 @@ allocate as needed. Returns nothing — mutates the backend."
       (set! (ansi-backend-prev-term b) (t:make-term #:width w #:height h)))
      ((or (not (= (t:term-width cur) w))
           (not (= (t:term-height cur) h)))
+      (let ((out (ansi-backend-port b)))
+        (display "\x1b[2J\x1b[H" out)
+        (force-output out))
       (t:term-resize! cur w h)
       (t:term-resize! prev w h)
-      ;; force a full repaint after resize by zeroing prev
       (t:term-clear! prev)))))
 
 (define-method (backend-draw (b <ansi-backend>) cmds)
