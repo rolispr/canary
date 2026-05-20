@@ -47,8 +47,8 @@
          (children (tree-children node))
          (enum (tree-enumerator node))
          (lines (if root-text
-                    (list (hbox (txt prefix #:face branch-face)
-                                (txt root-text #:face item-face)))
+                    (list (hbox (txt prefix #:fg branch-face)
+                                (txt root-text #:fg item-face)))
                     '())))
     (let loop ((cs children) (idx 0) (acc lines))
       (cond
@@ -66,15 +66,15 @@
                        (cont-prefix (string-append prefix cont))
                        (rest (if (null? sub) '()
                                  (map (lambda (ln)
-                                        (hbox (txt cont-prefix #:face branch-face) ln))
+                                        (hbox (txt cont-prefix #:fg branch-face) ln))
                                       (cdr sub)))))
                   (loop (cdr cs) (+ idx 1)
                         (append (reverse rest)
                                 (if (null? sub) acc (cons (car sub) acc))))))
                (else
                 (loop (cdr cs) (+ idx 1)
-                      (cons (hbox (txt (string-append prefix branch) #:face branch-face)
-                                  (txt (format #f "~a" child) #:face item-face))
+                      (cons (hbox (txt (string-append prefix branch) #:fg branch-face)
+                                  (txt (format #f "~a" child) #:fg item-face))
                             acc))))))))))))
 
 (define (tree-view tree)

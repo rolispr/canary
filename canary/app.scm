@@ -5,10 +5,14 @@
   #:use-module (canary component)
   #:use-module (canary backend)
   #:use-module (canary backend-ansi)
+  #:use-module (canary theme)
   #:use-module (canary render)
   #:use-module (canary keymap)
   #:use-module (canary keymap-input)
+  #:use-module ((canary view) #:select (make-text-node))
   #:use-module ((canary draw) #:select (make-clear))
+  #:use-module ((canary layout) #:select (txt vbox width overlay pin))
+  #:use-module ((canary borders) #:select (boxed border-rounded))
   #:use-module (fibers)
   #:use-module (fibers channels)
   #:use-module (fibers operations)
@@ -16,21 +20,27 @@
   #:use-module ((fibers timers) #:select ((sleep . fiber-sleep)))
   #:use-module (oop goops)
   #:use-module (srfi srfi-1)
+  #:use-module (srfi srfi-9)
   #:use-module (ice-9 receive)
   #:use-module (ice-9 rdelim)
   #:use-module (ice-9 binary-ports)
   #:use-module (system foreign)
   #:use-module (rnrs bytevectors)
   #:export (<app>
-            make-app
             run-app
+            init update view
             send
-            log-error
-            get-errors
-            app-model
+            <log-entry> log-entry?
+            log-entry-time log-entry-source log-entry-level log-entry-text
+            log! clear-log!
+            with-engine-error
+            render-log
             app-keymap
             app-backend
+            app-theme
+            app-title
             app-running?
+            app-log-entries app-show-log? app-log-cap app-log-height-frac
             set-app-keymap!
             at tail-from
             first second third fourth fifth
@@ -125,55 +135,136 @@
        #'(hash-for-each (lambda (k v) (loop (rest ...) body ...)) ht)))))
 
 (define-class <app> ()
-  (model    #:init-keyword #:model    #:accessor app-model)
-  (init-fn  #:init-keyword #:init     #:accessor app-init)
-  (update-fn #:init-keyword #:update  #:accessor app-update)
-  (view-fn  #:init-keyword #:view     #:accessor app-view)
-  (msg-ch   #:init-keyword #:msg-ch   #:accessor app-msg-ch)
-  (stop-ch  #:init-keyword #:stop-ch  #:accessor app-stop-ch)
-  (backend  #:init-keyword #:backend  #:accessor app-backend)
-  (keymap   #:init-keyword #:keymap   #:accessor app-keymap)
-  (running? #:init-value #t           #:accessor app-running?)
-  (errors   #:init-value '()          #:accessor app-errors)
-  (max-errors #:init-value 10         #:accessor app-max-errors))
+  ;; user-facing config (set at make-time)
+  (title       #:init-keyword #:title       #:init-value #f
+               #:accessor app-title)
+  (keymap      #:init-keyword #:keymap      #:init-value #f
+               #:accessor app-keymap)
+  (theme       #:init-keyword #:theme       #:init-value #f
+               #:accessor app-theme)
+  (alt-screen? #:init-keyword #:alt-screen? #:init-value #t
+               #:accessor app-alt-screen?)
+  (cursor      #:init-keyword #:cursor      #:init-value 'hidden
+               #:accessor app-cursor)
+  (mouse       #:init-keyword #:mouse       #:init-value 'off
+               #:accessor app-mouse)
+  (filter      #:init-keyword #:filter      #:init-value #f
+               #:accessor app-filter)
+  (backend     #:init-keyword #:backend     #:init-value #f
+               #:accessor app-backend)
+  ;; log panel config
+  (show-log?       #:init-keyword #:show-log?       #:init-value #t
+                   #:accessor app-show-log?)
+  (log-cap         #:init-keyword #:log-cap         #:init-value 200
+                   #:accessor app-log-cap)
+  (log-height-frac #:init-keyword #:log-height-frac #:init-value 1/5
+                   #:accessor app-log-height-frac)
+  ;; engine-managed
+  (msg-queue   #:init-value '()              #:accessor app-msg-queue)
+  (msg-bell    #:init-form (make-channel)    #:accessor app-msg-bell)
+  (bell-rung?  #:init-value #f               #:accessor app-bell-rung?)
+  (stop-ch     #:init-form (make-channel)    #:accessor app-stop-ch)
+  (running?    #:init-value #t               #:accessor app-running?)
+  (log-entries #:init-value '()              #:accessor app-log-entries))
 
-(define* (make-app #:key
-                   model
-                   (init   (lambda (m) #f))
-                   update
-                   view
-                   (backend (make-ansi-backend))
-                   (keymap (keymap)))
-  (make <app>
-    #:model   model
-    #:init    init
-    #:update  update
-    #:view    view
-    #:msg-ch  (make-channel)
-    #:stop-ch (make-channel)
-    #:backend backend
-    #:keymap  keymap))
+(define-generic init)
+(define-generic update)
+(define-generic view)
+
+(define-method (init   (a <app>))         #f)
+(define-method (update (a <app>) msg sz)  (values a #f))
+(define-method (view   (a <app>) sz)      (make-text-node "" 'default '()))
+
+(define-method (initialize (a <app>) initargs)
+  (next-method)
+  (unless (app-keymap a)  (set! (app-keymap  a) (keymap)))
+  (unless (app-theme  a)  (set! (app-theme   a) default-theme))
+  (unless (app-backend a)
+    (set! (app-backend a) (make-ansi-backend #:theme (app-theme a))))
+  ;; if both backend and theme were supplied, keep backend's theme in sync
+  (when (and (app-theme a) (ansi-backend-theme (app-backend a)))
+    (set-ansi-backend-theme! (app-backend a) (app-theme a))))
 
 (define (send app msg)
+  "Enqueue MSG on the app's msg queue and ring the bell so the event
+loop wakes. Non-blocking: fibers in single-threaded mode means plain
+set! on the queue is safe."
   (when (app-running? app)
-    (put-message (app-msg-ch app) msg)))
+    (set! (app-msg-queue app) (cons msg (app-msg-queue app)))
+    (unless (app-bell-rung? app)
+      (set! (app-bell-rung? app) #t)
+      (spawn-fiber
+       (lambda () (put-message (app-msg-bell app) #t))))))
+
+(define (drain-msgs! app)
+  (let ((q (app-msg-queue app)))
+    (set! (app-msg-queue app) '())
+    (reverse q)))
 
 (define (stop-app! app)
   (when (app-running? app)
     (set! (app-running? app) #f)
-    (put-message (app-stop-ch app) 'stop)))
+    ;; wake any fiber blocked on the msg bell so it can observe running?=#f
+    (unless (app-bell-rung? app)
+      (set! (app-bell-rung? app) #t)
+      (spawn-fiber (lambda () (put-message (app-msg-bell app) #t))))
+    ;; signal shutdown to run-fibers body; spawn so we don't block if no one's listening
+    (spawn-fiber (lambda () (put-message (app-stop-ch app) 'stop)))))
 
 (define (set-app-keymap! app km)
   (set! (app-keymap app) km))
 
-(define (log-error app msg)
-  (let ((errs (app-errors app)))
-    (set! (app-errors app)
-          (take (cons msg errs)
-                (min (app-max-errors app) (+ 1 (length errs)))))))
+(define-record-type <log-entry>
+  (make-log-entry time source level text)
+  log-entry?
+  (time   log-entry-time)
+  (source log-entry-source)     ; 'update 'view 'render 'init 'cmd 'stderr 'exec 'user
+  (level  log-entry-level)      ; 'info 'warn 'error
+  (text   log-entry-text))
 
-(define (get-errors app)
-  (app-errors app))
+(define (log! app source level text)
+  (let* ((entry (make-log-entry (current-time) source level text))
+         (entries (cons entry (app-log-entries app)))
+         (cap (app-log-cap app)))
+    (set! (app-log-entries app)
+          (if (> (length entries) cap) (take entries cap) entries))))
+
+(define (clear-log! app)
+  (set! (app-log-entries app) '()))
+
+(define-syntax-rule (with-engine-error app source body ...)
+  (catch #t (lambda () body ...)
+    (lambda (k . a)
+      (log! app source 'error (format #f "~a ~a" k a)))))
+
+(define-generic render-log)
+(define-method (render-log (a <app>) sz entries panel-h)
+  (default-render-log sz entries panel-h))
+
+(define (default-render-log sz entries panel-h)
+  (let* ((cols   (size-width sz))
+         (inner-w (max 1 (- cols 2)))
+         (inner-h (max 1 (- panel-h 2)))
+         (recent (if (> (length entries) inner-h)
+                     (take entries inner-h)
+                     entries))
+         (lines  (reverse recent)))
+    (boxed
+     (apply vbox
+            (map (lambda (e)
+                   (width
+                    (txt (format #f "[~a/~a] ~a"
+                                 (log-entry-source e)
+                                 (log-entry-level  e)
+                                 (log-entry-text   e))
+                         #:fg (case (log-entry-level e)
+                                ((error) 'error)
+                                ((warn)  'warning)
+                                (else    'info)))
+                    inner-w))
+                 lines))
+     #:border border-rounded
+     #:fg 'muted)))
 
 (define +stderr-line-cap+ 4096)
 
@@ -183,9 +274,11 @@
         (wait (wait-until-port-readable-operation rport)))
     (define (flush! truncated?)
       (when (positive? pos)
-        (log-error app
-                   (let ((s (utf8->string acc 0 pos)))
-                     (if truncated? (string-append s " […truncated]") s)))
+        (log! app 'stderr 'warn
+              (let* ((slice (make-bytevector pos))
+                     (_ (bytevector-copy! acc 0 slice 0 pos))
+                     (s (utf8->string slice)))
+                (if truncated? (string-append s " […truncated]") s)))
         (set! pos 0)))
     (let loop ()
       (when (app-running? app)
@@ -207,20 +300,103 @@
             (set! pos (+ pos 1))
             (loop))))))))
 
+(define (compose-log-overlay app sz user-tree)
+  (let ((entries (app-log-entries app)))
+    (cond
+     ((or (not (app-show-log? app)) (null? entries)) user-tree)
+     (else
+      (let* ((rows (size-height sz))
+             (frac (app-log-height-frac app))
+             (panel-h (max 4 (inexact->exact
+                              (round (* rows (if (rational? frac)
+                                                 frac (/ 1 5))))))))
+        (overlay user-tree
+                 (pin 0 (- rows panel-h)
+                      (render-log app sz entries panel-h))))))))
+
 (define (render-frame app)
   (catch #t
     (lambda ()
-      (let* ((sz   (backend-size (app-backend app)))
-             (node ((app-view app) (app-model app) sz))
-             (cmds (cons (make-clear) (render node (size-width sz) (size-height sz)))))
+      (let* ((sz    (backend-size (app-backend app)))
+             (user  (view app sz))
+             (tree  (compose-log-overlay app sz user))
+             (cmds  (cons (make-clear)
+                          (render tree (size-width sz) (size-height sz)))))
         (backend-draw (app-backend app) cmds)))
     (lambda (key . args)
-      (log-error app (format #f "render: ~a ~a" key args)))))
+      ;; render itself threw — don't recurse into log (would loop); just stderr
+      (format (current-error-port) "canary render failed: ~a ~a\n" key args))))
 
 (define (run-command app cmd)
   (cond
    ((not cmd) #f)
    ((eq? cmd 'quit) (stop-app! app))
+   ((clear-screen? cmd)
+    (set! (ansi-backend-prev-term (app-backend app)) #f))
+   ((set-title? cmd)
+    (let ((out (ansi-backend-port (app-backend app))))
+      (display (string-append "\x1b]0;" (set-title-text cmd) "\x07") out)
+      (force-output out)))
+   ((cursor? cmd)
+    (let ((out (ansi-backend-port (app-backend app))))
+      (case (cursor-mode cmd)
+        ((hidden hide) (display "\x1b[?25l" out))
+        ((visible show) (display "\x1b[?25h" out))
+        ((bar) (display "\x1b[5 q" out))
+        ((underline) (display "\x1b[3 q" out))
+        ((block) (display "\x1b[1 q" out)))
+      (force-output out)))
+   ((alt-screen? cmd)
+    (let ((out (ansi-backend-port (app-backend app))))
+      (display (if (alt-screen-on? cmd) "\x1b[?1049h" "\x1b[?1049l") out)
+      (force-output out)))
+   ((mouse-mode? cmd)
+    (let ((out (ansi-backend-port (app-backend app))))
+      (case (mouse-mode-kind cmd)
+        ((off)
+         (display "\x1b[?1006l\x1b[?1015l\x1b[?1002l\x1b[?1003l\x1b[?1000l" out))
+        ((click)
+         (display "\x1b[?1003l\x1b[?1002l\x1b[?1000h\x1b[?1006h" out))
+        ((cell)
+         (display "\x1b[?1003l\x1b[?1002h\x1b[?1006h" out))
+        ((all)
+         (display "\x1b[?1003h\x1b[?1006h" out)))
+      (force-output out)))
+   ((println? cmd)
+    (let ((out (ansi-backend-port (app-backend app)))
+          (line (apply string-append
+                       (map (lambda (p) (if (string? p) p (format #f "~a" p)))
+                            (println-parts cmd)))))
+      (display "\x1b[?1049l" out)
+      (display line out)
+      (newline out)
+      (display "\x1b[?1049h" out)
+      (set! (ansi-backend-prev-term (app-backend app)) #f)
+      (force-output out)))
+   ((set-palette? cmd)
+    (let ((th (app-theme app)))
+      (when (theme-set! th (set-palette-name cmd))
+        (set! (ansi-backend-prev-term (app-backend app)) #f))))
+   ((cycle-palette? cmd)
+    (let ((th (app-theme app)))
+      (theme-cycle! th)
+      (set! (ansi-backend-prev-term (app-backend app)) #f)))
+   ((clear-log? cmd) (clear-log! app))
+   ((suspend? cmd)
+    (let ((sigtstp 20))   ; Linux; macOS=18; fine as long as we match the build host for now
+      (backend-shutdown (app-backend app))
+      (kill (getpid) sigtstp)
+      (backend-init (app-backend app))
+      (send app (resumed))))
+   ((exec? cmd)
+    (let ((command (exec-command cmd))
+          (on-done (exec-on-done cmd)))
+      (backend-shutdown (app-backend app))
+      (let ((status (system command)))
+        (backend-init (app-backend app))
+        (when on-done
+          (let ((msg (on-done status)))
+            (when msg (send app msg)))))))
    ((batch? cmd)
     (for-each (lambda (c) (run-command app c)) (cdr cmd)))
    ((sequence? cmd)
@@ -234,7 +410,7 @@
                            (when msg (send app msg)))))
                      (cdr cmd)))
          (lambda (key . args)
-           (log-error app (format #f "~a: ~a" key args)))))))
+           (log! app 'cmd 'error (format #f "~a ~a" key args)))))))
    ((every? cmd)
     (let ((period   (cadr cmd))
           (producer (caddr cmd)))
@@ -248,7 +424,7 @@
                  (let ((msg (producer)))
                    (when msg (send app msg))))
                (lambda (key . args)
-                 (log-error app (format #f "every: ~a ~a" key args))))
+                 (log! app 'cmd 'error (format #f "every: ~a ~a" key args))))
              (loop)))))))
    ((after? cmd)
     (let ((delay    (cadr cmd))
@@ -262,7 +438,7 @@
                (let ((msg (producer)))
                  (when msg (send app msg))))
              (lambda (key . args)
-               (log-error app (format #f "after: ~a ~a" key args)))))))))
+               (log! app 'cmd 'error (format #f "after: ~a ~a" key args)))))))))
    ((procedure? cmd)
     (spawn-fiber
      (lambda ()
@@ -271,7 +447,7 @@
            (let ((msg (cmd)))
              (when msg (send app msg))))
          (lambda (key . args)
-           (log-error app (format #f "~a: ~a" key args)))))))))
+           (log! app 'cmd 'error (format #f "~a ~a" key args)))))))))
 
 (define (input-loop app)
   (let ((wait (wait-until-port-readable-operation (current-input-port))))
@@ -298,34 +474,50 @@
                   (drain last-mouse-time))))))))))))
 
 (define (dispatch-to-user app msg)
-  (let ((sz (backend-size (app-backend app))))
-    (call-with-values
-        (lambda () ((app-update app) (app-model app) msg sz))
-      (lambda (new-model cmd)
-        (set! (app-model app) new-model)
-        (when cmd (run-command app cmd))))))
+  (catch #t
+    (lambda ()
+      (let* ((flt (app-filter app))
+             (msg (if flt (flt msg) msg)))
+        (when msg
+          (let ((sz (backend-size (app-backend app))))
+            (call-with-values
+                (lambda () (update app msg sz))
+              (lambda (new-app cmd)
+                (when cmd (run-command app cmd))))))))
+    (lambda (key . args)
+      (log! app 'update 'error (format #f "~a ~a" key args)))))
+
+(define (process-one app msg)
+  (cond
+   ((eq? msg 'quit) (stop-app! app))
+   ((or (key? msg) (mouse? msg))
+    (receive (action new-km) (feed-key (app-keymap app) msg)
+      (set-app-keymap! app new-km)
+      (cond
+       ((eq? action 'pending) #f)
+       ((eq? action 'quit)    (stop-app! app))
+       (action                (dispatch-to-user app action))
+       (else                  (dispatch-to-user app msg)))))
+   (else
+    (dispatch-to-user app msg))))
 
 (define (event-loop app)
   (let loop ()
     (when (app-running? app)
-      (let ((msg (get-message (app-msg-ch app))))
-        (cond
-         ((eq? msg 'quit)
-          (stop-app! app))
-         ((key? msg)
-          (receive (action new-km) (feed-key (app-keymap app) msg)
-            (set-app-keymap! app new-km)
-            (cond
-             ((eq? action 'pending) #f)
-             ((eq? action 'quit)    (stop-app! app))
-             (action                (dispatch-to-user app action)
-                                    (render-frame app))
-             (else                  (dispatch-to-user app msg)
-                                    (render-frame app)))))
-         (else
-          (dispatch-to-user app msg)
-          (render-frame app)))
-        (when (app-running? app) (loop))))))
+      ;; wait for the bell
+      (get-message (app-msg-bell app))
+      (set! (app-bell-rung? app) #f)
+      ;; drain everything that's been queued since the last loop iter
+      (let ((msgs (drain-msgs! app)))
+        (for-each (lambda (m) (when (app-running? app) (process-one app m)))
+                  msgs))
+      ;; one render per batch
+      (when (app-running? app)
+        (catch #t
+          (lambda () (render-frame app))
+          (lambda (key . args)
+            (log! app 'render 'error (format #f "~a ~a" key args)))))
+      (when (app-running? app) (loop)))))
 
 (define %dup2
   (pointer->procedure int
@@ -350,6 +542,13 @@
             (set! saved-stderr-fd (%dup2 2 100))
             (%dup2 (port->fdes (cdr stderr-pipe)) 2)
             (backend-init (app-backend app))
+            ;; apply app-level defaults at startup
+            (when (app-title app)
+              (run-command app (set-title (app-title app))))
+            (run-command app (cursor (app-cursor app)))
+            (run-command app (mouse-mode (app-mouse app)))
+            (unless (app-alt-screen? app)
+              (run-command app (alt-screen 'off)))
             (setup-signal-handlers do-cleanup)
             (setup-resize-handler
              (lambda ()
@@ -358,22 +557,52 @@
                    (send app (resize (size-width sz) (size-height sz))))))))
 
           (lambda ()
+            (define (guarded name thunk)
+              (lambda ()
+                (catch #t thunk
+                  (lambda (key . args)
+                    (log! app name 'error (format #f "~a ~a" key args))
+                    (stop-app! app)))))
             (run-fibers
              (lambda ()
-               (spawn-fiber (lambda () (event-loop app)))
-               (spawn-fiber (lambda () (input-loop app)))
-               (let ((init-cmd ((app-init app) (app-model app))))
+               (spawn-fiber (guarded 'event-loop (lambda () (event-loop app))))
+               (spawn-fiber (guarded 'input-loop (lambda () (input-loop app))))
+               (let ((init-cmd (init app)))
                  (when init-cmd (run-command app init-cmd)))
                (let ((sz (backend-size (app-backend app))))
                  (send app (resize (size-width sz) (size-height sz))))
                (spawn-fiber
                 (lambda () (drain-stderr-pipe app (car stderr-pipe))))
                (get-message (app-stop-ch app)))
-             #:hz 10))
+             #:hz 100))
 
           (lambda ()
             (do-cleanup))))
 
       (lambda (key . args)
+        (write-crash-log app key args)
         (do-cleanup)
         (apply throw key args)))))
+
+(define (write-crash-log app key args)
+  (false-if-exception
+   (let* ((cache (or (getenv "XDG_CACHE_HOME")
+                     (string-append (or (getenv "HOME") "/tmp") "/.cache")))
+          (dir   (string-append cache "/canary"))
+          (file  (string-append dir "/last-crash.log")))
+     (unless (file-exists? dir)
+       (false-if-exception (mkdir dir)))
+     (call-with-output-file file
+       (lambda (p)
+         (format p "=== canary crash @ ~a ===~%" (current-time))
+         (format p "uncaught: ~a ~a~%~%" key args)
+         (format p "=== log ring (~a entries, newest first) ===~%"
+                 (length (app-log-entries app)))
+         (for-each
+          (lambda (e)
+            (format p "~a [~a/~a] ~a~%"
+                    (log-entry-time   e)
+                    (log-entry-source e)
+                    (log-entry-level  e)
+                    (log-entry-text   e)))
+          (app-log-entries app)))))))

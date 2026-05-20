@@ -21,6 +21,11 @@
             text-node-face
             text-node-attrs
 
+            <text-runs-node>
+            text-runs-node?
+            make-text-runs-node
+            text-runs-node-runs
+
             <fill-node>
             fill-node?
             make-fill-node
@@ -62,6 +67,15 @@
             pad-node-bottom
             pad-node-left
             pad-node-face
+
+            <margin-node>
+            margin-node?
+            make-margin-node
+            margin-node-child
+            margin-node-top
+            margin-node-right
+            margin-node-bottom
+            margin-node-left
 
             <align-node>
             align-node?
@@ -140,6 +154,13 @@
 
 (define (make-text-node str face attrs) (%text-node str face attrs #f))
 
+(define-record-type <text-runs-node>
+  (%text-runs-node runs cache) text-runs-node?
+  (runs  text-runs-node-runs)
+  (cache text-runs-node-cache set-text-runs-node-cache!))
+
+(define (make-text-runs-node runs) (%text-runs-node runs #f))
+
 (define-record-type <fill-node>
   (%fill-node w h face cache)
   fill-node?
@@ -200,6 +221,19 @@
 
 (define (make-pad-node child top right bottom left face)
   (%pad-node child top right bottom left face #f))
+
+(define-record-type <margin-node>
+  (%margin-node child top right bottom left cache)
+  margin-node?
+  (child  margin-node-child)
+  (top    margin-node-top)
+  (right  margin-node-right)
+  (bottom margin-node-bottom)
+  (left   margin-node-left)
+  (cache  margin-node-cache set-margin-node-cache!))
+
+(define (make-margin-node child top right bottom left)
+  (%margin-node child top right bottom left #f))
 
 (define-record-type <align-node>
   (%align-node child mode width cache)
@@ -265,9 +299,10 @@
 (define (make-static-node child) (%static-node child #f #f #f))
 
 (define (view-node? x)
-  (or (text-node? x) (fill-node? x) (spacer-node? x)
+  (or (text-node? x) (text-runs-node? x)
+      (fill-node? x) (spacer-node? x)
       (vbox-node? x) (hbox-node? x) (boxed-node? x)
-      (pad-node? x) (align-node? x)
+      (pad-node? x) (margin-node? x) (align-node? x)
       (width-node? x) (height-node? x)
       (cursor-node? x) (overlay-node? x) (static-node? x)
       (string? x) (not x)))
@@ -285,6 +320,13 @@
    ((text-node? node)
     (memo text-node-cache set-text-node-cache! node
           (cons (str-visible-length (text-node-str node)) 1)))
+   ((text-runs-node? node)
+    (memo text-runs-node-cache set-text-runs-node-cache! node
+          (let loop ((rs (text-runs-node-runs node)) (sw 0))
+            (cond
+             ((null? rs) (cons sw 1))
+             (else (let ((s (view-size (car rs))))
+                     (loop (cdr rs) (+ sw (car s)))))))))
    ((fill-node? node)
     (memo fill-node-cache set-fill-node-cache! node
           (cons (fill-node-w node) (fill-node-h node))))
@@ -315,6 +357,11 @@
           (let ((s (view-size (pad-node-child node))))
             (cons (+ (car s) (pad-node-left node) (pad-node-right node))
                   (+ (cdr s) (pad-node-top node) (pad-node-bottom node))))))
+   ((margin-node? node)
+    (memo margin-node-cache set-margin-node-cache! node
+          (let ((s (view-size (margin-node-child node))))
+            (cons (+ (car s) (margin-node-left node) (margin-node-right node))
+                  (+ (cdr s) (margin-node-top  node) (margin-node-bottom node))))))
    ((align-node? node)
     (memo align-node-cache set-align-node-cache! node
           (let ((s (view-size (align-node-child node))))
@@ -346,6 +393,7 @@
    ((hbox-node? node)    (set-hbox-node-cache!    node #f))
    ((boxed-node? node)   (set-boxed-node-cache!   node #f))
    ((pad-node? node)     (set-pad-node-cache!     node #f))
+   ((margin-node? node)  (set-margin-node-cache!  node #f))
    ((align-node? node)   (set-align-node-cache!   node #f))
    ((width-node? node)   (set-width-node-cache!   node #f))
    ((height-node? node)  (set-height-node-cache!  node #f))

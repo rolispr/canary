@@ -1,8 +1,8 @@
 (define-module (canary protocol)
-  #:use-module (srfi srfi-9)
+  #:use-module (oop goops)
+  #:use-module (canary key)
+  #:re-export (<key> key key? key-sym key-mods)
   #:export (<size> size size? size-width size-height
-
-            <key> key key? key-char key-mods
 
             <mouse> mouse mouse?
             mouse-x mouse-y mouse-button mouse-action
@@ -11,40 +11,63 @@
 
             <resize> resize resize? resize-width resize-height
 
+            <focus>  focus  focus?
+            <blur>   blur   blur?
+            <resume> resumed resume?
+
             batch sequence batch? sequence?
             every every?
-            after after?))
+            after after?
 
-(define-record-type <size>
-  (size width height) size?
-  (width  size-width)
-  (height size-height))
+            set-title    set-title?    set-title-text
+            cursor       cursor?       cursor-mode
+            alt-screen   alt-screen?   alt-screen-on?
+            mouse-mode   mouse-mode?   mouse-mode-kind
+            clear-screen clear-screen?
+            println      println?      println-parts
+            suspend      suspend?
+            exec         exec?         exec-command exec-on-done
+            set-palette  set-palette?  set-palette-name
+            cycle-palette cycle-palette?
+            clear-log    clear-log?))
 
-(define-record-type <key>
-  (%key char mods) key?
-  (char key-char)
-  (mods key-mods))
+(define-class <size> ()
+  (width  #:init-keyword #:width  #:accessor size-width)
+  (height #:init-keyword #:height #:accessor size-height))
+(define (size? x) (is-a? x <size>))
+(define (size w h) (make <size> #:width w #:height h))
 
-(define* (key char #:optional (mods '()))
-  (%key char mods))
+(define-class <mouse> ()
+  (x      #:init-keyword #:x      #:accessor mouse-x)
+  (y      #:init-keyword #:y      #:accessor mouse-y)
+  (button #:init-keyword #:button #:accessor mouse-button)
+  (action #:init-keyword #:action #:accessor mouse-action))
+(define (mouse? x) (is-a? x <mouse>))
+(define (mouse x y button action)
+  (make <mouse> #:x x #:y y #:button button #:action action))
 
-(define-record-type <mouse>
-  (mouse x y button action) mouse?
-  (x      mouse-x)
-  (y      mouse-y)
-  (button mouse-button)
-  (action mouse-action))
+(define-class <tick> ()
+  (n #:init-keyword #:n #:init-value 0 #:accessor tick-n))
+(define (tick? x) (is-a? x <tick>))
+(define* (tick #:optional (n 0)) (make <tick> #:n n))
 
-(define-record-type <tick>
-  (%tick n) tick?
-  (n tick-n))
+(define-class <resize> ()
+  (width  #:init-keyword #:width  #:accessor resize-width)
+  (height #:init-keyword #:height #:accessor resize-height))
+(define (resize? x) (is-a? x <resize>))
+(define (resize w h) (make <resize> #:width w #:height h))
 
-(define* (tick #:optional (n 0)) (%tick n))
+(define-class <focus>  ())
+(define (focus? x) (is-a? x <focus>))
+(define (focus) (make <focus>))
 
-(define-record-type <resize>
-  (resize width height) resize?
-  (width  resize-width)
-  (height resize-height))
+(define-class <blur>   ())
+(define (blur? x) (is-a? x <blur>))
+(define (blur) (make <blur>))
+
+(define-class <resume> ())
+(define (resume? x) (is-a? x <resume>))
+(define (resumed) (make <resume>))
 
 (define (batch . cmds) (cons 'batch cmds))
 (define (sequence . cmds) (cons 'sequence cmds))
@@ -52,7 +75,6 @@
 (define (sequence? c) (and (pair? c) (eq? (car c) 'sequence)))
 
 (define (every . args)
-  ;; Usage: (every #:hz N producer) | (every #:seconds S producer) | (every #:ms MS producer)
   (let loop ((args args) (period #f))
     (cond
      ((null? args)       (error "every: pass producer thunk last"))
@@ -69,8 +91,6 @@
 (define (every? c) (and (pair? c) (eq? (car c) 'every)))
 
 (define (after . args)
-  ;; Usage: (after #:ms N producer) | (after #:seconds S producer) | (after #:hz N producer)
-  ;; One-shot: producer fires once after the delay; not rescheduled.
   (let loop ((args args) (delay #f))
     (cond
      ((null? args)      (error "after: pass producer thunk last"))
@@ -85,3 +105,45 @@
           ((#:hz)      (loop (cddr args) (/ 1 v)))
           (else        (error "after: unknown keyword" k))))))))
 (define (after? c) (and (pair? c) (eq? (car c) 'after)))
+
+(define (set-title s)        (list 'set-title s))
+(define (set-title? c)       (and (pair? c) (eq? (car c) 'set-title)))
+(define (set-title-text c)   (cadr c))
+
+(define (cursor mode)        (list 'cursor mode))
+(define (cursor? c)          (and (pair? c) (eq? (car c) 'cursor)))
+(define (cursor-mode c)      (cadr c))
+
+(define (alt-screen mode)    (list 'alt-screen mode))
+(define (alt-screen? c)      (and (pair? c) (eq? (car c) 'alt-screen)))
+(define (alt-screen-on? c)   (eq? (cadr c) 'on))
+
+(define (mouse-mode mode)    (list 'mouse-mode mode))
+(define (mouse-mode? c)      (and (pair? c) (eq? (car c) 'mouse-mode)))
+(define (mouse-mode-kind c)  (cadr c))
+
+(define (clear-screen)       'clear-screen)
+(define (clear-screen? c)    (eq? c 'clear-screen))
+
+(define (println . parts)    (cons 'println parts))
+(define (println? c)         (and (pair? c) (eq? (car c) 'println)))
+(define (println-parts c)    (cdr c))
+
+(define (suspend)            'suspend-cmd)
+(define (suspend? c)         (eq? c 'suspend-cmd))
+
+(define* (exec command #:key on-done)
+  (list 'exec command on-done))
+(define (exec? c)            (and (pair? c) (eq? (car c) 'exec)))
+(define (exec-command c)     (cadr c))
+(define (exec-on-done c)     (caddr c))
+
+(define (set-palette name)   (list 'set-palette name))
+(define (set-palette? c)     (and (pair? c) (eq? (car c) 'set-palette)))
+(define (set-palette-name c) (cadr c))
+
+(define (cycle-palette)      'cycle-palette)
+(define (cycle-palette? c)   (eq? c 'cycle-palette))
+
+(define (clear-log)          'clear-log-cmd)
+(define (clear-log? c)       (eq? c 'clear-log-cmd))

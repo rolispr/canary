@@ -5,6 +5,7 @@
              (canary backend-test)
              (canary draw)
              (canary faces)
+             (canary protocol)
              (canary view)
              (canary layout)
              (canary borders)
@@ -53,8 +54,10 @@
 
 (test-group "size accessor and setter"
   (let ((b (make-test-backend #:cols 10 #:rows 5)))
-    (test-equal "initial size" '(10 . 5) (test-backend-size b))
+    (test-equal "initial w" 10 (size-width  (test-backend-size b)))
+    (test-equal "initial h"  5 (size-height (test-backend-size b)))
     (test-backend-set-size! b 40 12)
-    (test-equal "after resize" '(40 . 12) (test-backend-size b))))
+    (test-equal "after w" 40 (size-width  (test-backend-size b)))
+    (test-equal "after h" 12 (size-height (test-backend-size b)))))
 
 (test-end "backend-test")

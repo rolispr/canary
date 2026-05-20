@@ -1,39 +1,38 @@
 (add-to-load-path (string-append (dirname (current-filename)) "/.."))
 
 (use-modules (srfi srfi-64)
-             (canary chord)
+             (canary key)
              (canary keymap))
 
 (test-begin "keymap")
 
 (define km
-  (make-keymap
-   (list (cons (list (chord #\q)) ':quit)
-         (cons (list (chord #\x 'control)
-                     (chord #\c 'control)) ':force-quit))))
+  (keymap (bind #\q 'quit)
+          (bind '(#\x ctrl) '(#\c ctrl) 'force-quit)))
 
-(test-equal "single chord match"
-            ':quit
-            (call-with-values (lambda () (keymap-step km (chord #\q)))
+(test-equal "single key match"
+            'quit
+            (call-with-values (lambda () (keymap-step km #\q))
                               (lambda (r _) r)))
 
 (test-equal "non-match returns #f"
             #f
-            (call-with-values (lambda () (keymap-step km (chord #\z)))
+            (call-with-values (lambda () (keymap-step km #\z))
                               (lambda (r _) r)))
 
-(test-equal "chord prefix returns pending"
+(test-equal "key prefix returns pending"
             'pending
-            (call-with-values (lambda () (keymap-step km (chord #\x 'control)))
+            (call-with-values (lambda () (keymap-step km (key #\x 'control)))
                               (lambda (r _) r)))
 
-(test-equal "second chord of sequence completes binding"
-            ':force-quit
+(test-equal "second key of sequence completes binding"
+            'force-quit
             (call-with-values
                 (lambda ()
-                  (call-with-values (lambda () (keymap-step km (chord #\x 'control)))
-                                    (lambda (_ km2)
-                                      (keymap-step km2 (chord #\c 'control)))))
+                  (call-with-values
+                      (lambda () (keymap-step km (key #\x 'control)))
+                    (lambda (_ km2)
+                      (keymap-step km2 (key #\c 'control)))))
               (lambda (r _) r)))
 
 (test-end "keymap")

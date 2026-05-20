@@ -2,6 +2,7 @@
   #:use-module (canary backend)
   #:use-module (canary draw)
   #:use-module (canary faces)
+  #:use-module (canary theme)
   #:use-module (canary protocol)
   #:use-module (canary terminal)
   #:use-module ((canary term types) #:prefix t:)
@@ -12,22 +13,29 @@
   #:use-module (srfi srfi-1)
   #:export (<ansi-backend>
             make-ansi-backend
-            ansi-backend-faces
+            ansi-backend-theme
+            set-ansi-backend-theme!
             ansi-backend-port
+            ansi-backend-cur-term
+            ansi-backend-prev-term
+            ansi-backend-size
             face->sgr
             cmds->ansi
             render-cmds-to-term!))
 
 (define-class <ansi-backend> (<backend>)
   (port      #:init-keyword #:port  #:accessor ansi-backend-port)
-  (faces     #:init-keyword #:faces #:accessor ansi-backend-faces)
+  (theme     #:init-keyword #:theme #:accessor ansi-backend-theme)
   (size      #:init-keyword #:size  #:init-value (size 80 24) #:accessor ansi-backend-size)
   (cur-term  #:init-value #f #:accessor ansi-backend-cur-term)
   (prev-term #:init-value #f #:accessor ansi-backend-prev-term))
 
+(define (set-ansi-backend-theme! b th)
+  (set! (ansi-backend-theme b) th))
+
 (define* (make-ansi-backend #:key (port (current-output-port))
-                            (faces default-faces))
-  (make <ansi-backend> #:port port #:faces faces))
+                            (theme default-theme))
+  (make <ansi-backend> #:port port #:theme theme))
 
 (define (hex->rgb hex)
   (let ((h (if (and (>= (string-length hex) 1)
@@ -74,13 +82,24 @@
        ((null? parts) "\x1b[0m")
        (else (string-append "\x1b[" (string-join parts ";" 'infix) "m")))))))
 
-(define (apply-face-to-term-attrs! tattrs face extra-attrs)
+(define (resolve-color v th)
+  (cond
+   ((string? v) v)
+   ((symbol? v) (theme-resolve th v))
+   (else #f)))
+
+(define (normalize-face f)
+  "Faces on cmds can be the symbol 'default or a <face> record. Return
+either a <face> record or #f for 'default."
+  (cond ((face? f) f) (else #f)))
+
+(define (apply-face-to-term-attrs! tattrs face extra-attrs th)
   (t:reset-face-attrs! tattrs)
   (when face
-    (when (face-fg face)
-      (t:set-face-fg! tattrs (hex->rgb (face-fg face))))
-    (when (face-bg face)
-      (t:set-face-bg! tattrs (hex->rgb (face-bg face))))
+    (let ((fg (resolve-color (face-fg face) th))
+          (bg (resolve-color (face-bg face) th)))
+      (when fg (t:set-face-fg! tattrs (hex->rgb fg)))
+      (when bg (t:set-face-bg! tattrs (hex->rgb bg))))
     (for-each
      (lambda (a)
        (case a
@@ -93,7 +112,7 @@
          ((strikethrough) (t:set-face-crossed! tattrs #t))))
      (append (or (face-attrs face) '()) (or extra-attrs '())))))
 
-(define (render-cmds-to-term! term cmds face-table)
+(define (render-cmds-to-term! term cmds th)
   (for-each
    (lambda (cmd)
      (cond
@@ -102,16 +121,18 @@
        (t:term-erase-in-display! term 2)
        (t:term-goto! term 1 1))
       ((text-cmd? cmd)
-       (let ((face (face-table-lookup face-table (text-face cmd))))
-         (apply-face-to-term-attrs! (t:term-attrs term) face (text-attrs cmd))
-         (t:term-goto! term (+ (text-row cmd) 1) (+ (text-col cmd) 1))
-         (t:term-write! term (text-str cmd))))
+       (apply-face-to-term-attrs! (t:term-attrs term)
+                                  (normalize-face (text-face cmd))
+                                  (text-attrs cmd) th)
+       (t:term-goto! term (+ (text-row cmd) 1) (+ (text-col cmd) 1))
+       (t:term-write! term (text-str cmd)))
       ((fill-cmd? cmd)
-       (let* ((face (face-table-lookup face-table (fill-face cmd)))
-              (w (fill-w cmd))
+       (let* ((w (fill-w cmd))
               (h (fill-h cmd))
               (line (make-string w #\space)))
-         (apply-face-to-term-attrs! (t:term-attrs term) face '())
+         (apply-face-to-term-attrs! (t:term-attrs term)
+                                    (normalize-face (fill-face cmd))
+                                    '() th)
          (do ((r 0 (+ r 1)))
              ((= r h))
            (t:term-goto! term (+ (fill-row cmd) r 1) (+ (fill-col cmd) 1))
@@ -142,12 +163,12 @@
               (max mh (+ (cursor-row c) 1))))
          (else (lp (cdr cs) mw mh))))))))
 
-(define* (cmds->ansi cmds faces #:key cols rows)
+(define* (cmds->ansi cmds th #:key cols rows)
   (let* ((ext (cmds-extent cmds))
          (w (or cols (car ext)))
          (h (or rows (cdr ext)))
          (term (t:make-term #:width w #:height h)))
-    (render-cmds-to-term! term cmds faces)
+    (render-cmds-to-term! term cmds th)
     (t:term-diff->ansi #f term)))
 
 (define +sync-begin+ "\x1b[?2026h")
@@ -184,7 +205,7 @@ on screen as ghosts."
     (let ((cur  (ansi-backend-cur-term b))
           (prev (ansi-backend-prev-term b)))
       (t:term-clear! cur)
-      (render-cmds-to-term! cur cmds (ansi-backend-faces b))
+      (render-cmds-to-term! cur cmds (ansi-backend-theme b))
       (display +sync-begin+ out)
       (display (t:term-diff->ansi prev cur) out)
       (display +sync-end+ out)
@@ -200,12 +221,18 @@ on screen as ghosts."
   (enter-raw-mode)
   (enter-alternate-screen)
   (hide-cursor)
+  (let ((out (ansi-backend-port b)))
+    (display "\x1b[?1004h" out)  ; focus reporting on
+    (force-output out))
   (let ((sz (get-terminal-size)))
     (set! (ansi-backend-size b) sz)
     (set! (ansi-backend-cur-term b)  #f)
     (set! (ansi-backend-prev-term b) #f)))
 
 (define-method (backend-shutdown (b <ansi-backend>))
+  (let ((out (ansi-backend-port b)))
+    (display "\x1b[?1004l" out)
+    (force-output out))
   (show-cursor)
   (exit-alternate-screen)
   (exit-raw-mode))

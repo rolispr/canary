@@ -41,7 +41,7 @@
          (apply append
                 (map (lambda (text w)
                        (list (txt " ")
-                             (txt (string-pad-right text w) #:face face)
+                             (txt (string-pad-right text w) #:fg face)
                              (txt " │")))
                      cells widths))))
 

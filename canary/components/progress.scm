@@ -42,8 +42,8 @@
          (empty (- w filled)))
     (apply hbox
            (txt "[")
-           (txt (make-string filled #\█) #:face (progress-filled-face p))
-           (txt (make-string empty #\░) #:face (progress-empty-face p))
+           (txt (make-string filled #\█) #:fg (progress-filled-face p))
+           (txt (make-string empty #\░) #:fg (progress-empty-face p))
            (txt "]")
            (if (progress-show-percent? p)
                (list (txt (string-append " " (number->string pct) "%")))

@@ -47,4 +47,4 @@
 (define (spinner-view s)
   (let ((frames (spinner-frames s))
         (idx (spinner-frame-idx s)))
-    (txt (vector-ref frames idx) #:face (spinner-face s))))
+    (txt (vector-ref frames idx) #:fg (spinner-face s))))

@@ -44,7 +44,7 @@
              ((< (char->integer char) 32)
               (let ((k (ctrl-char-to-key char)))
                 (%ilog "read-key-msg: control char ~d -> ~a" (char->integer char) k)
-                (key k '(control))))
+                (key k 'control)))
              (else
               (%ilog "read-key-msg: graphic '~a'" char)
               (key char)))))
@@ -86,12 +86,76 @@
     (%ilog "parse-escape-sequence: SS3 'O'")
     (parse-ss3-sequence port))
    ((char-alphabetic? char)
-    (key char '(meta)))
+    (key char 'alt))
    ((= (char->integer char) 127)
-    (key 'backspace '(meta)))
+    (key 'backspace 'alt))
    (else
     (%ilog "parse-escape-sequence: unknown ESC seq start '~a'" char)
     (key 'escape))))
+
+(define (xterm-mod->mods n)
+  "Decode an xterm-style modifier number (1=none, 2=shift, 3=alt,
+4=shift+alt, 5=ctrl, 6=shift+ctrl, 7=alt+ctrl, 8=shift+alt+ctrl, 9..=meta).
+Returns a (possibly empty) list of canonical mod symbols."
+  (let ((bits (if (and (integer? n) (positive? n)) (- n 1) 0))
+        (mods '()))
+    (when (positive? (logand bits 1)) (set! mods (cons 'shift   mods)))
+    (when (positive? (logand bits 2)) (set! mods (cons 'alt     mods)))
+    (when (positive? (logand bits 4)) (set! mods (cons 'control mods)))
+    (when (positive? (logand bits 8)) (set! mods (cons 'super   mods)))
+    mods))
+
+(define (tilde-key->sym n)
+  "Map an ESC[N~ N value to a key symbol, or 'unknown."
+  (cond
+   ((memv n '(1 7))  'home)
+   ((eqv? n 2)       'insert)
+   ((eqv? n 3)       'delete)
+   ((memv n '(4 8))  'end)
+   ((eqv? n 5)       'pgup)
+   ((eqv? n 6)       'pgdn)
+   ((memv n '(11 12 13 14 15))
+    (string->symbol (format #f "f~a" (- n 10))))
+   ((memv n '(17 18 19 20 21))
+    (string->symbol (format #f "f~a" (- n 11))))
+   ((memv n '(23 24))
+    (string->symbol (format #f "f~a" (- n 12))))
+   (else 'unknown)))
+
+(define (csi-letter->sym c)
+  "Map a final CSI letter (A-Z) to a key symbol, or #f."
+  (case c
+    ((#\A) 'up) ((#\B) 'down) ((#\C) 'right) ((#\D) 'left)
+    ((#\H) 'home) ((#\F) 'end) ((#\Z) 'backtab)
+    ((#\P) 'f1) ((#\Q) 'f2) ((#\R) 'f3) ((#\S) 'f4)
+    (else #f)))
+
+(define (make-key sym mods)
+  (apply key sym mods))
+
+(define (read-csi-params-and-final port first-char)
+  "Already consumed FIRST-CHAR (a digit). Read remaining digits + ';'
+separators until a non-numeric / non-';' terminator. Return (values
+params final-char). Each param is a number or #f for missing.
+Returns (#f #f) if the stream ends before a terminator."
+  (let loop ((cur (list first-char)) (params '()))
+    (cond
+     ((not (char-ready? port))
+      (values #f #f))
+     (else
+      (let ((c (read-char port)))
+        (cond
+         ((char-numeric? c) (loop (append cur (list c)) params))
+         ((char=? c #\;)
+          (loop '() (cons (if (null? cur) #f
+                              (string->number (list->string cur)))
+                          params)))
+         (else
+          (let ((final-params
+                 (reverse (cons (if (null? cur) #f
+                                    (string->number (list->string cur)))
+                                params))))
+            (values final-params c)))))))))
 
 (define (parse-csi-sequence port)
   (if (not (char-ready? port))
@@ -99,45 +163,32 @@
       (let ((ch (read-char port)))
         (%ilog "parse-csi-sequence: ch='~a' (code ~a)" ch (char->integer ch))
         (cond
-         ((char=? ch #\<)
-          (parse-mouse-sequence port))
-         ((memv ch '(#\A #\B #\C #\D #\H #\F #\Z))
-          (case ch
-            ((#\A) (%ilog "parse-csi-sequence: -> up") (key 'up))
-            ((#\B) (%ilog "parse-csi-sequence: -> down") (key 'down))
-            ((#\C) (%ilog "parse-csi-sequence: -> right") (key 'right))
-            ((#\D) (%ilog "parse-csi-sequence: -> left") (key 'left))
-            ((#\H) (%ilog "parse-csi-sequence: -> home") (key 'home))
-            ((#\F) (%ilog "parse-csi-sequence: -> end") (key 'end))
-            ((#\Z) (%ilog "parse-csi-sequence: -> backtab") (key 'backtab))))
+         ((char=? ch #\<)         (parse-mouse-sequence port))
+         ((char=? ch #\I)         (focus))
+         ((char=? ch #\O)         (blur))
+         ((csi-letter->sym ch) => (lambda (sym) (key sym)))
          ((char-numeric? ch)
-          (let loop ((digits (list ch))
-                     (term #f))
-            (if (and (not term)
-                     (char-ready? port)
-                     (let ((c (peek-char port)))
-                       (or (char-numeric? c) (char=? c #\~) (char=? c #\;))))
-                (let ((c (read-char port)))
-                  (if (or (char=? c #\~) (char=? c #\;))
-                      (loop digits c)
-                      (loop (append digits (list c)) term)))
-                (begin
-                  (%ilog "parse-csi-sequence: digits='~a' term='~a'"
-                         (list->string digits) term)
-                  (if (and term (char=? term #\~))
-                      (let ((num (string->number (list->string digits))))
-                        (case num
-                          ((3) (%ilog "parse-csi-sequence: -> delete")
-                               (key 'delete))
-                          ((200) (%ilog "parse-csi-sequence: bracketed paste start")
-                                 (parse-bracketed-paste port))
-                          (else (key 'unknown))))
-                      (key 'unknown))))))
+          (call-with-values (lambda () (read-csi-params-and-final port ch))
+            (lambda (params final)
+              (cond
+               ((not final) (key 'unknown))
+               ((eqv? final #\~)
+                (let* ((n   (car params))
+                       (mod (and (pair? (cdr params)) (cadr params)))
+                       (sym (and n (tilde-key->sym n))))
+                  (cond
+                   ((not sym) (key 'unknown))
+                   ((eqv? n 200) (parse-bracketed-paste port))
+                   (else (make-key sym (xterm-mod->mods (or mod 1)))))))
+               ((csi-letter->sym final)
+                => (lambda (sym)
+                     ;; ESC[1;mod{A-H,F,Z,P-S} — first param is usually 1
+                     (let ((mod (and (pair? (cdr params)) (cadr params))))
+                       (make-key sym (xterm-mod->mods (or mod 1))))))
+               (else (key 'unknown))))))
          (else
-          (let loop ()
-            (when (char-ready? port)
-              (read-char port)
-              (loop)))
+          (let drain ()
+            (when (char-ready? port) (read-char port) (drain)))
           (key 'unknown))))))
 
 (define (parse-ss3-sequence port)

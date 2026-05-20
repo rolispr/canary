@@ -1,5 +1,6 @@
 (define-module (canary borders)
   #:use-module (canary view)
+  #:use-module (canary faces)
   #:use-module (srfi srfi-9)
   #:export (<border>
             border?
@@ -46,5 +47,6 @@
 (define border-ascii
   (make-border "-" "-" "|" "|" "+" "+" "+" "+"))
 
-(define* (boxed child #:key (border border-normal) (face #f))
-  (make-boxed-node child border face))
+(define* (boxed child #:key (border border-normal) (fg #f) (bg #f))
+  (let ((f (if (or fg bg) (face #:fg fg #:bg bg #:attrs '()) #f)))
+    (make-boxed-node child border f)))

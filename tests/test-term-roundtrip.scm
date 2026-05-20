@@ -80,17 +80,16 @@
 
 (test-group "face round-trips through the grid"
   (let* ((face-table (extend-face-table default-faces
-                                        `((red . ,(make-face "#ff0000" #f '(bold))))))
+                                        `((red . ,(face #:fg "#ff0000" #:attrs '(bold))))))
          (cmds (render (txt "go") 4 1))
          (cmds-with-face (list ((@@ (canary draw) make-text) 0 0 "go" 'red '())))
          (term (t:make-term #:width 4 #:height 1)))
     (render-cmds-to-term! term cmds-with-face face-table)
-    (let ((cell (t:term-grid-cell term 0 0)))
-      (test-equal "char is 'g'" #\g (t:cell-char cell))
-      (let ((face (t:cell-face cell)))
-        (test-assert "face exists" face)
-        (test-equal "fg is RGB list" '(255 0 0) (t:face-fg face))
-        (test-assert "bold is set" (t:face-bold? face))))))
+    (test-equal "char is 'g'" #\g (t:term-char-at term 0 0))
+    (let ((face (t:term-face-at term 0 0)))
+      (test-assert "face exists" face)
+      (test-equal "fg is RGB list" '(255 0 0) (t:face-fg face))
+      (test-assert "bold is set" (t:face-bold? face)))))
 
 (test-group "diff is empty when nothing changes"
   (let ((node (vbox (txt "stable") (txt "rows"))))

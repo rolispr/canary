@@ -3,6 +3,8 @@
 (define-module (canary components paginator)
   #:use-module (canary protocol)
   #:use-module (canary component)
+  #:use-module (canary layout)
+  #:use-module (canary key)
   #:use-module (ice-9 match)
   #:use-module (oop goops)
   #:export (make-paginator
@@ -78,32 +80,30 @@
   (= (paginator-page paginator)
      (1- (paginator-total-pages paginator))))
 
-;;; Rendering
 (define (paginator-dots-view paginator)
-  "Render pagination as dots"
   (let ((total (paginator-total-pages paginator))
         (current (paginator-page paginator))
         (active (paginator-active-dot paginator))
         (inactive (paginator-inactive-dot paginator)))
-    (string-join
-     (map (lambda (i)
-            (if (= i current) active inactive))
-          (iota total))
-     "")))
+    (apply hbox
+           (map (lambda (i)
+                  (if (= i current)
+                      (txt active #:fg 'accent)
+                      (txt inactive #:fg 'muted)))
+                (iota total)))))
 
 (define (paginator-arabic-view paginator)
-  "Render pagination as arabic numbers"
   (let ((fmt (paginator-arabic-format paginator))
         (current (1+ (paginator-page paginator)))
         (total (paginator-total-pages paginator)))
-    (format #f fmt current total)))
+    (txt (format #f fmt current total) #:fg 'muted)))
 
 ;;; Update
 (define (paginator-update paginator msg)
   "Update paginator with message"
   (cond
    ((key? msg)
-    (let ((k (key-char msg)))
+    (let ((k (key-sym msg)))
       (match k
         ((or 'right 'page-down)
          (paginator-next-page! paginator)

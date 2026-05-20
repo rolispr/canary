@@ -2,7 +2,7 @@
   #:use-module (canary backend)
   #:use-module (canary backend-ansi)
   #:use-module (canary draw)
-  #:use-module (canary faces)
+  #:use-module (canary theme)
   #:use-module (canary protocol)
   #:use-module ((canary term types) #:prefix t:)
   #:use-module ((canary term render) #:prefix t:)
@@ -22,11 +22,11 @@
 
 (define-class <test-backend> (<backend>)
   (cmds #:init-value '() #:accessor test-backend-cmds-slot)
-  (faces #:init-keyword #:faces #:accessor test-backend-faces)
+  (theme #:init-keyword #:theme #:accessor test-backend-theme)
   (size #:init-keyword #:size #:init-value (size 80 24) #:accessor test-backend-size-slot))
 
-(define* (make-test-backend #:key (cols 80) (rows 24) (faces default-faces))
-  (make <test-backend> #:size (size cols rows) #:faces faces))
+(define* (make-test-backend #:key (cols 80) (rows 24) (theme default-theme))
+  (make <test-backend> #:size (size cols rows) #:theme theme))
 
 (define (test-backend-cmds b)
   (reverse (test-backend-cmds-slot b)))
@@ -52,7 +52,7 @@
 (define (test-backend-grid b)
   (let* ((sz (test-backend-size-slot b))
          (term (t:make-term #:width (size-width sz) #:height (size-height sz))))
-    (render-cmds-to-term! term (test-backend-cmds b) (test-backend-faces b))
+    (render-cmds-to-term! term (test-backend-cmds b) (test-backend-theme b))
     term))
 
 (define (test-backend-dump b)

@@ -25,20 +25,20 @@
              (content (string-trim-both (substring trimmed level)))
              (prefix (make-string level #\#)))
         (txt (string-append prefix " " content)
-             #:face (case level
+             #:fg (case level
                       ((1) 'heading)
                       ((2) 'accent)
                       (else 'info))
-             #:bold? #t)))
+             #:bold)))
      ((and (char=? (string-ref trimmed 0) #\>) (> (string-length trimmed) 1))
       (txt (string-append "│ " (string-trim-both (substring trimmed 1)))
-           #:face 'muted))
+           #:fg 'muted))
      ((and (> (string-length trimmed) 1)
            (char=? (string-ref trimmed 0) #\-)
            (char=? (string-ref trimmed 1) #\space))
       (txt (string-append "  • " (substring trimmed 2))))
      ((and (>= (string-length trimmed) 3) (string-every #\- trimmed))
-      (txt (make-string 40 #\─) #:face 'dim))
+      (txt (make-string 40 #\─) #:fg 'dim))
      (else
       (txt trimmed)))))
 

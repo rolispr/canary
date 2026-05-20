@@ -8,6 +8,7 @@
             spacer
             join
             pad
+            margin
             align
             width
             height
@@ -15,37 +16,73 @@
             place-cursor
             pin
             overlay
-            static))
+            static
+            parse-style-args))
 
 (define %empty-text (make-text-node "" 'default '()))
 
-(define* (txt str #:key (face 'default) bold? italic? underline? strikethrough? reverse?)
-  (let ((attrs '()))
-    (when bold?         (set! attrs (cons 'bold attrs)))
-    (when italic?       (set! attrs (cons 'italic attrs)))
-    (when underline?    (set! attrs (cons 'underline attrs)))
-    (when strikethrough? (set! attrs (cons 'strikethrough attrs)))
-    (when reverse?      (set! attrs (cons 'reverse attrs)))
-    (if (and (string? str) (string-null? str)
-             (eq? face 'default) (null? attrs))
-        %empty-text
-        (make-text-node str face attrs))))
-
-(define (split-face-arg args)
-  (let lp ((args args) (children '()) (face #f))
+(define (parse-style-args args)
+  "Parse a mixed arg list. Returns (values positionals face attrs).
+Recognised kwargs (each consumed in place):
+  #:fg c / #:bg c   — c is a hex string \"#abc123\" or a palette symbol
+  #:bold #:italic #:underline #:reverse #:strike #:dim
+FACE is #f if neither #:fg nor #:bg was supplied."
+  (let lp ((args args)
+           (pos '())
+           (fg #f) (bg #f) (has-color? #f)
+           (attrs '()))
     (cond
-     ((null? args) (values (reverse children) face))
-     ((eq? (car args) #:face) (lp (cddr args) children (cadr args)))
-     (else (lp (cdr args) (cons (car args) children) face)))))
+     ((null? args)
+      (values (reverse pos)
+              (if has-color? (face #:fg fg #:bg bg #:attrs '()) #f)
+              (reverse attrs)))
+     ((eq? (car args) #:fg)
+      (lp (cddr args) pos (cadr args) bg #t attrs))
+     ((eq? (car args) #:bg)
+      (lp (cddr args) pos fg (cadr args) #t attrs))
+     ((eq? (car args) #:bold)      (lp (cdr args) pos fg bg has-color? (cons 'bold attrs)))
+     ((eq? (car args) #:italic)    (lp (cdr args) pos fg bg has-color? (cons 'italic attrs)))
+     ((eq? (car args) #:underline) (lp (cdr args) pos fg bg has-color? (cons 'underline attrs)))
+     ((eq? (car args) #:reverse)   (lp (cdr args) pos fg bg has-color? (cons 'reverse attrs)))
+     ((eq? (car args) #:strike)    (lp (cdr args) pos fg bg has-color? (cons 'strikethrough attrs)))
+     ((eq? (car args) #:dim)       (lp (cdr args) pos fg bg has-color? (cons 'dim attrs)))
+     (else
+      (lp (cdr args) (cons (car args) pos) fg bg has-color? attrs)))))
+
+(define (txt . args)
+  "Build a text node.
+Positional args are strings or nested text nodes (inline spans).
+Styling kwargs: #:fg #:bg (hex or palette symbol),
+                #:bold #:italic #:underline #:reverse #:strike #:dim."
+  (call-with-values (lambda () (parse-style-args args))
+    (lambda (spans eff-face rev-attrs)
+      (cond
+       ((null? spans)
+        (if (and (not eff-face) (null? rev-attrs))
+            %empty-text
+            (make-text-node "" (or eff-face 'default) rev-attrs)))
+       ((and (null? (cdr spans)) (string? (car spans)))
+        (if (and (string-null? (car spans))
+                 (not eff-face) (null? rev-attrs))
+            %empty-text
+            (make-text-node (car spans) (or eff-face 'default) rev-attrs)))
+       (else
+        (make-text-runs-node
+         (map (lambda (s)
+                (cond
+                 ((string? s)
+                  (make-text-node s (or eff-face 'default) rev-attrs))
+                 (else s)))
+              spans)))))))
 
 (define (vbox . args)
-  (call-with-values (lambda () (split-face-arg args))
-    (lambda (children face)
+  (call-with-values (lambda () (parse-style-args args))
+    (lambda (children face _attrs)
       (make-vbox-node (filter (lambda (x) x) children) face))))
 
 (define (hbox . args)
-  (call-with-values (lambda () (split-face-arg args))
-    (lambda (children face)
+  (call-with-values (lambda () (parse-style-args args))
+    (lambda (children face _attrs)
       (make-hbox-node (filter (lambda (x) x) children) face))))
 
 (define %zero-spacer (make-spacer-node 0 0))
@@ -62,12 +99,21 @@
 (define (join . elements)
   (apply vbox elements))
 
-(define* (pad child #:key (top 0) (right 0) (bottom 0) (left 0) (all 0) (face #f))
+(define* (pad child #:key (top 0) (right 0) (bottom 0) (left 0) (all 0)
+              (fg #f) (bg #f))
+  (let ((t (if (positive? all) all top))
+        (r (if (positive? all) all right))
+        (b (if (positive? all) all bottom))
+        (l (if (positive? all) all left))
+        (f (if (or fg bg) (face #:fg fg #:bg bg #:attrs '()) #f)))
+    (make-pad-node child t r b l f)))
+
+(define* (margin child #:key (top 0) (right 0) (bottom 0) (left 0) (all 0))
   (let ((t (if (positive? all) all top))
         (r (if (positive? all) all right))
         (b (if (positive? all) all bottom))
         (l (if (positive? all) all left)))
-    (make-pad-node child t r b l face)))
+    (make-margin-node child t r b l)))
 
 (define* (align child mode #:key (width #f))
   (make-align-node child mode width))
@@ -78,8 +124,11 @@
 (define* (height child h #:key (valign 'top))
   (make-height-node child h valign))
 
-(define* (fill w h #:key (face 'default))
-  (make-fill-node w h face))
+(define* (fill w h #:key (fg #f) (bg #f))
+  (let ((f (cond
+            ((or fg bg) (face #:fg fg #:bg bg #:attrs '()))
+            (else 'default))))
+    (make-fill-node w h f)))
 
 (define* (place-cursor col row #:key (style 'block))
   (make-cursor-node col row style))

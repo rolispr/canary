@@ -47,7 +47,7 @@
    ((not (key? msg))
     (values ti #f))
    (else
-    (let ((k (key-char msg))
+    (let ((k (key-sym msg))
           (val (textinput-value ti))
           (cur (textinput-cursor ti))
           (limit (textinput-char-limit ti)))
@@ -91,8 +91,8 @@
     (cond
      (showing-ph?
       (hbox (txt prompt)
-            (if focused? (txt " " #:reverse? #t) #f)
-            (txt ph #:face 'placeholder)))
+            (if focused? (txt " " #:reverse) #f)
+            (txt ph #:fg 'placeholder)))
      (else
       (let* ((start (max 0 (- cur (- w 5))))
              (visible (if (> (string-length val) w)
@@ -110,7 +110,7 @@
                            "")))
             (hbox (txt prompt)
                   (txt left)
-                  (txt cell #:reverse? #t)
+                  (txt cell #:reverse)
                   (txt right))))
          (else
           (hbox (txt prompt) (txt visible)))))))))
