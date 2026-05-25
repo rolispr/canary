@@ -1,33 +1,24 @@
-# canary — design
+# canary
 
-A live-coded TUI library for Guile. View tree + per-node state + a msg
-cascade. No GOOPS in author code.
+A TUI library for Guile. You describe the screen as a tree, the engine
+turns it into terminal cells. Edit your code in the REPL and the next
+render reflects the change.
 
-Two bets that shape every decision:
+The unit is a **node**. `vbox`, `txt`, `boxed` are nodes. A spinner is
+a node. A file browser is a node. Your whole app is a node. Nodes nest
+in other nodes; the engine walks one tree.
 
-1. **View is a tree, not a styled string.** Composition, overlays,
-   sizing and diffing are engine primitives. The user describes
-   structure; the engine handles cells. The axis tea+lipgloss don't
-   cover — they hand the user strings to concatenate and styles to
-   chain.
+Stateful nodes mutate themselves in place, returning cmds when they
+want the engine to do something — start a timer, swap palettes, quit.
 
-2. **Styling is a palette + boolean flags.** `#:fg`/`#:bg` accept a
-   hex string *or* a palette name (`#:fg 'accent`). Attribute flags
-   are individual booleans (`#:bold`, `#:italic`). Multiple palettes
-   register under one theme; `(cycle-palette)` swaps the active one
-   and every palette-named reference recolors. No `if dark-mode-then`
-   at call sites, no separate style-name layer.
-
-Aim: clearer than tea+lipgloss for visual/composable TUIs, with
-REPL-driven iteration. Not optimising for smallest binary, lowest
-baseline CPU, or ecosystem size.
+Color is by name. `#:fg 'accent` reads from the active palette;
+`(cycle-palette)` flips palettes and every reference recolors at once.
+Styling attributes are individual flags (`#:bold #:italic`), not a
+list.
 
 ## Architecture
 
-Everything is a **node**. Layout primitives (`txt`, `vbox`, `hbox`,
-`boxed`, …) are nodes. Stateful UI elements (textinput, panel, your
-app's root) are also nodes — they're `<stateful>` nodes carrying a
-mutable state record and three procs:
+A stateful node is a record plus three procs:
 
 ```
 view-proc  : (lambda (self) → child-node)
@@ -35,9 +26,15 @@ react-proc : (lambda (self msg) → #f | cmd)        ; optional
 init-proc  : (lambda (self) → unspecified)          ; optional
 ```
 
-State mutates in place through setters; return values from view/react/
-init are not used to replace state. `react-proc` returns `#f` for no
-effect or a cmd value (see [Cmds](#cmds)).
+State mutates in place through setters. Return values from view, react,
+and init don't replace state — react's return is interpreted as a cmd
+(or `#f`), the others are discarded. See [Cmds](#cmds) for what react
+can hand back.
+
+Layout primitives (`txt`, `vbox`, `hbox`, `boxed`, …) are also nodes,
+but pure data — no state, no react. They're records the renderer knows
+how to walk. Whether you wrote a stateful node or a layout record, the
+parent treats it the same.
 
 The engine:
 
@@ -374,15 +371,18 @@ make run
 Launches the app and exposes a Geiser-listenable Guile image on
 `localhost:37146`. From an Emacs/VS Code Geiser session:
 
-- redefine a node's view-proc or react-proc — the wrapper holds a
-  reference, so the next render/cascade picks up the new closure
-  *after* recreating the node. To swap behaviour live without
-  reconstruction, dispatch on a slot rather than capturing in the
-  closure body.
-- mutate slots of any live stateful directly between events
-- re-evaluate the theme to swap palettes or restyle
+- **Redefine a view, react, or init.** `define-node` emits the procs
+  as named top-level bindings (`%counter-view`, `%counter-react`,
+  `%counter-init`) and the node holds thunks that re-resolve them on
+  every call. `(set! %counter-view (lambda (c) …))` from the REPL
+  updates every live instance on the next render.
+- **Mutate state slots directly** between events. `(set! (counter-n c)
+  99)` at the REPL.
+- **Re-evaluate the theme** to swap palettes or restyle.
 
-No rebuild loop. The instance and process state survive code changes.
+Caveat: re-evaluating the entire `define-node` form creates a fresh
+`<name-state>` record type and orphans existing instances. Stick to
+`(set! %name-view …)` and slot mutation to keep your running state.
 
 ## Anti-patterns
 

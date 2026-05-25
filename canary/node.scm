@@ -33,8 +33,24 @@
 ;;
 ;; Accessors take the <stateful> wrapper, not the inner state record —
 ;; authors never touch the inner record. (counter-n self) reads;
-;; (set-counter-n! self v) writes. The wrapper is what gets passed
-;; around in trees and what the engine walks.
+;; (set! (counter-n self) v) writes.
+;;
+;; ── Live coding ────────────────────────────────────────────────────
+;;
+;; The macro emits the view/react/init lambdas as named top-level
+;; bindings:
+;;   %counter-view   %counter-react   %counter-init
+;;
+;; The <stateful> instances hold thunks that re-resolve those names at
+;; call time, so redefining any of them from a Geiser REPL takes
+;; effect on the next render or msg for ALL live instances. To live-
+;; tweak a view:
+;;
+;;   (set! %counter-view (lambda (self) (txt "new!")))
+;;
+;; Caveat: redefining the entire `define-node` form creates a new
+;; <name-state> record type; old instances orphan. Stick to redefining
+;; the procs themselves (or set! a slot value) to keep state.
 
 (define-syntax define-node
   (lambda (stx)
@@ -85,12 +101,17 @@
               (rec-make     (id #'name "%make-" name-sym "-state"))
               (make-name    (id #'name "make-" name-sym))
               (pred-name    (id #'name name-sym "?"))
+              ;; Top-level proc bindings — author can `(set! …)` these
+              ;; from the REPL to live-update view/react/init for ALL
+              ;; existing instances.
+              (view-binding  (id #'name "%" name-sym "-view"))
+              (react-binding (id #'name "%" name-sym "-react"))
+              (init-binding  (id #'name "%" name-sym "-init"))
               ((slot ...)        (map (lambda (s) (datum->syntax #'name s)) slots))
               ((init ...)        (map (lambda (v) (datum->syntax #'name v)) inits))
               ((priv-acc ...)    (map (lambda (s) (id #'name "%" name-sym "-" s)) slots))
               ((priv-set ...)    (map (lambda (s) (id #'name "%set-" name-sym "-" s "!")) slots))
               ((pub-acc ...)     (map (lambda (s) (id #'name name-sym "-" s)) slots))
-              ((pub-set ...)     (map (lambda (s) (id #'name "set-" name-sym "-" s "!")) slots))
               (view-form    (datum->syntax #'name view-expr))
               (react-form   (datum->syntax #'name react-expr))
               (init-form    (datum->syntax #'name init-expr))
@@ -101,11 +122,7 @@
                  (rec-make slot ...)
                  rec-pred
                  (slot priv-acc priv-set) ...)
-               ;; ONE mutation idiom: a getter-with-setter accessor.
-               ;; (foo-x node)        — read
-               ;; (set! (foo-x node) v) — write
-               ;; Same shape as goops accessors. No separate set-foo-x!
-               ;; proc to memorize.
+               ;; (foo-x node) reads; (set! (foo-x node) v) writes.
                (define pub-acc
                  (getter-with-setter
                   (lambda (self) (priv-acc (stateful-state self)))
@@ -113,9 +130,21 @@
                ...
                (define (pred-name x)
                  (and (stateful? x) (rec-pred (stateful-state x))))
+               ;; Named top-level proc bindings. Live-redef target.
+               (define view-binding  view-form)
+               (define react-binding react-form)
+               (define init-binding  init-form)
                (define* (make-name #:key (slot init) ...)
-                 (make-stateful (rec-make slot ...)
-                                view-form
-                                #:react-proc react-form
-                                #:init-proc  init-form
-                                #:subscribes subs-form)))))))))
+                 (make-stateful
+                  (rec-make slot ...)
+                  ;; Thunks re-read the top-level binding each call, so
+                  ;; (set! %name-view …) at the REPL updates every
+                  ;; existing instance on its next render/cascade.
+                  (lambda (self) (view-binding self))
+                  #:react-proc (lambda (self msg)
+                                 (and (procedure? react-binding)
+                                      (react-binding self msg)))
+                  #:init-proc  (lambda (self)
+                                 (when (procedure? init-binding)
+                                   (init-binding self)))
+                  #:subscribes subs-form)))))))))
