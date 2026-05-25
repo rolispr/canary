@@ -6,6 +6,7 @@
              (canary layout)
              (canary borders)
              (canary faces)
+             (canary theme)
              (canary draw)
              (canary render)
              (canary backend-ansi)
@@ -79,12 +80,10 @@
                                                default-faces))))))
 
 (test-group "face round-trips through the grid"
-  (let* ((face-table (extend-face-table default-faces
-                                        `((red . ,(face #:fg "#ff0000" #:attrs '(bold))))))
-         (cmds (render (txt "go") 4 1))
-         (cmds-with-face (list ((@@ (canary draw) make-text) 0 0 "go" 'red '())))
+  (let* ((red-face (face #:fg "#ff0000" #:attrs '(bold)))
+         (cmds-with-face (list ((@@ (canary draw) make-text) 0 0 "go" red-face '())))
          (term (t:make-term #:width 4 #:height 1)))
-    (render-cmds-to-term! term cmds-with-face face-table)
+    (render-cmds-to-term! term cmds-with-face default-theme)
     (test-equal "char is 'g'" #\g (t:term-char-at term 0 0))
     (let ((face (t:term-face-at term 0 0)))
       (test-assert "face exists" face)

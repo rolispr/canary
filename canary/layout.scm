@@ -21,6 +21,7 @@
             on-click
             on-hover
             flex
+            wrap
             parse-style-args))
 
 (define %empty-text (make-text-node "" 'default '()))
@@ -173,3 +174,21 @@ is transparent and BODY renders at its intrinsic size."
   (unless (and (number? shrink) (>= shrink 0))
     (error "flex: SHRINK must be a non-negative number" shrink))
   (make-flex-node body grow shrink))
+
+(define (wrap str . styling-args)
+  "Word-wrapped text. STR is wrapped to the rendered rect's width on
+each render; newlines in STR are paragraph breaks. Styling kwargs
+match `txt`: #:fg #:bg (hex string or palette symbol), and the boolean
+flags #:bold #:italic #:underline #:reverse #:strike #:dim.
+
+`wrap` reports intrinsic size (1,1) so it behaves as a fill widget
+inside a vbox/hbox — wrap it in `flex` to claim space:
+
+  (flex (wrap long-text))
+
+Outside flex it shrinks to one cell. That is intentional: the wrap
+height depends on the rect width, so the parent container has to
+decide how much room to give it."
+  (call-with-values (lambda () (parse-style-args styling-args))
+    (lambda (_ face attrs)
+      (make-wrap-node str (or face 'default) attrs))))

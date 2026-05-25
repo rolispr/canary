@@ -96,10 +96,6 @@
           (txt e    #:fg face #:bold sel?)
           (when dir? (txt "/" #:fg 'muted)))))
 
-(define (preview-tree text)
-  (let ((lines (string-split text #\newline)))
-    (apply vbox (map (lambda (l) (txt l)) lines))))
-
 (define-method (view (d <dired>) sz)
   (let* ((es (dired-entries d))
          (items (map (lambda (e i) (entry-line d i e))
@@ -112,7 +108,7 @@
                  #:title (string-append " " (dired-path d) " ")
                  #:fg 'accent))
          (right
-          (boxed (preview-tree (dired-preview d))
+          (boxed (flex (wrap (dired-preview d)))
                  #:title (let ((e (dired-current-entry d)))
                            (if e (string-append " " e " ") " preview "))
                  #:fg 'muted)))

@@ -12,6 +12,61 @@
 
 (define (clamp s max-w) (string-display-clamp s max-w))
 
+(define (wrap-paragraph str width)
+  "Greedy word-wrap STR to WIDTH columns. Returns a list of line
+strings. A word longer than WIDTH is hard-broken at column WIDTH;
+shorter words are joined with single spaces."
+  (cond
+   ((or (<= width 0) (string-null? str)) (list str))
+   (else
+    (let ((words (filter (lambda (w) (not (string-null? w)))
+                         (string-split str #\space))))
+      (cond
+       ((null? words) (list ""))
+       (else
+        (let loop ((ws words) (cur (car words)) (acc '()))
+          (cond
+           ((null? (cdr ws)) (reverse (cons cur acc)))
+           (else
+            (let* ((next (cadr ws))
+                   (joined (string-append cur " " next)))
+              (cond
+               ((<= (string-display-width joined) width)
+                (loop (cdr ws) joined acc))
+               ((> (string-display-width next) width)
+                ;; word itself overflows; emit current, hard-break next.
+                (let lp ((rem next) (acc (cons cur acc)))
+                  (cond
+                   ((<= (string-display-width rem) width)
+                    (loop (cdr ws) rem acc))
+                   (else (lp (string-display-clamp rem (- (string-length rem) 1))
+                             (cons (string-display-clamp rem width) acc))))))
+               (else (loop (cdr ws) next (cons cur acc))))))))))))))
+
+(define (wrap-text str width)
+  "Split STR on newlines, word-wrap each paragraph to WIDTH. Returns a
+flat list of line strings."
+  (apply append
+         (map (lambda (p) (wrap-paragraph p width))
+              (string-split str #\newline))))
+
+(define (render-wrap node rect)
+  (let* ((w (rect-w rect))
+         (h (rect-h rect))
+         (face (wrap-node-face node))
+         (attrs (wrap-node-attrs node))
+         (lines (wrap-text (wrap-node-str node) w))
+         (visible (let lp ((rem lines) (acc '()) (k 0))
+                    (cond
+                     ((or (null? rem) (>= k h)) (reverse acc))
+                     (else (lp (cdr rem) (cons (car rem) acc) (+ k 1)))))))
+    (let lp ((ls visible) (row (rect-row rect)) (acc '()))
+      (cond
+       ((null? ls) (reverse acc))
+       (else
+        (lp (cdr ls) (+ row 1)
+            (cons (make-text (rect-col rect) row (car ls) face attrs) acc)))))))
+
 (define (rect-contains? rect x y)
   (and (<= (rect-col rect) x)
        (< x (+ (rect-col rect) (rect-w rect)))
@@ -98,6 +153,8 @@
       (view->cmds effective rect mx my)))
    ((flex-node? node)
     (view->cmds (flex-node-body node) rect mx my))
+   ((wrap-node? node)
+    (render-wrap node rect))
    ((is-a? node <object>)
     (view->cmds (memoized-view node (size (rect-w rect) (rect-h rect)))
                 rect mx my))

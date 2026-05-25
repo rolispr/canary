@@ -37,7 +37,7 @@
    <keymap> keymap keymap? bind keymap-step keymap-reset
 
    txt vbox hbox spacer join pad margin align width height fill
-   place-cursor pin overlay static image on-click on-hover flex
+   place-cursor pin overlay static image on-click on-hover flex wrap
 
    <border> border? border-normal border-rounded border-thick
    border-double border-ascii boxed

@@ -163,7 +163,14 @@
             make-flex-node
             flex-node-body
             flex-node-grow
-            flex-node-shrink))
+            flex-node-shrink
+
+            <wrap-node>
+            wrap-node?
+            make-wrap-node
+            wrap-node-str
+            wrap-node-face
+            wrap-node-attrs))
 
 (define-record-type <rect>
   (make-rect col row w h)
@@ -394,6 +401,20 @@ swap glyphs, wrap with overlay, return a static replacement node."
 (define (make-flex-node body grow shrink)
   (%flex-node body grow shrink #f))
 
+;; Word-wrapped text. The string is wrapped to the rendered rect's
+;; width at render time; intrinsic size is (1, 1) so the node behaves
+;; as a fill widget — wrap it in (flex …) to claim space. Embeds
+;; newlines as paragraph breaks.
+(define-record-type <wrap-node>
+  (%wrap-node str face attrs)
+  wrap-node?
+  (str   wrap-node-str)
+  (face  wrap-node-face)
+  (attrs wrap-node-attrs))
+
+(define (make-wrap-node str face attrs)
+  (%wrap-node str face attrs))
+
 (define-generic view)
 (define-generic update)
 
@@ -428,6 +449,7 @@ swap glyphs, wrap with overlay, return a static replacement node."
       (cursor-node? x) (overlay-node? x) (static-node? x)
       (image-node? x) (click-node? x) (hover-node? x)
       (flex-node? x)
+      (wrap-node? x)
       (is-a? x <object>)
       (string? x) (not x)))
 
@@ -515,6 +537,7 @@ swap glyphs, wrap with overlay, return a static replacement node."
    ((flex-node? node)
     (memo flex-node-cache set-flex-node-cache! node
           (view-size (flex-node-body node))))
+   ((wrap-node? node) (cons 1 1))
    ((is-a? node <object>)
     (cons 0 0))
    (else (cons 0 0))))

@@ -380,6 +380,7 @@ Containers:
 (on-click action child)
 (on-hover child styler-proc)
 (flex    child #:grow 1 #:shrink 0)
+(wrap    "long text" #:fg 'name #:bold)   ; word-wraps to its rect's width
 ```
 
 `pad` and `margin` are distinct: `pad` adds space *inside* a
@@ -411,6 +412,21 @@ Don't subtract terminal dimensions to size items by hand
 (`(width child (- cols 10))`). Wrap with `flex` and the box does the
 math, even across resizes.
 
+### Wrap
+
+`wrap` is a word-wrapping text node. Unlike `txt` (single-line, clips
+on overflow), `wrap` re-flows its string to the rendered rect's width
+on each frame. Newlines in the input become paragraph breaks.
+
+```scheme
+(flex (wrap "Long preview text that re-flows when the pane resizes…"
+            #:fg 'muted))
+```
+
+`wrap` reports intrinsic `(1, 1)` — it's a fill widget. Outside a
+`flex` it shrinks to one cell. The author decides how much room to
+give it by wrapping in `flex` (or `(width …)` / `(height …)`).
+
 ## Bundled components
 
 Plain GOOPS classes in `canary/components/`:
@@ -421,6 +437,7 @@ Plain GOOPS classes in `canary/components/`:
 - `<spinner>` — animated frames, installs its own ticker on `<init>`
 - `<progress>` — bar with percentage
 - `<paginator>` — page indicator with key bindings
+- `<viewport>` — scrollable list of items with optional tail-mode auto-follow
 
 Each exposes `make-X` as the constructor and a small set of accessors.
 Embed an instance as a slot on your app class; the engine cascades
