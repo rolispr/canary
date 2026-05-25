@@ -243,16 +243,26 @@ needed)."
       (set-engine-mouse-y! eng ny)
       #t))))
 
+(define (subscribed? node msg)
+  "Return #t if NODE wants MSG. A node with no subscribes (#f or '())
+gets every msg (default). A node with a list of predicates only gets
+msgs that match one of them."
+  (let ((subs (stateful-subscribes node)))
+    (cond
+     ((not subs)   #t)
+     ((null? subs) #t)
+     (else (any (lambda (pred) (pred msg)) subs)))))
+
 (define (cascade! eng msg)
-  "Run msg through every stateful node in the tree, collecting cmds.
-react-proc returns either #f or a cmd; state mutates in place.
-Returns a single cmd (a batch of all collected cmds, or #f if none)."
+  "Run msg through every interested stateful node in the tree,
+collecting cmds. react-proc returns either #f or a cmd; state mutates
+in place. Returns a single cmd, a batch, or #f."
   (let ((cmds '()))
     (walk-statefuls
      (engine-root eng)
      (lambda (node)
        (let ((react (stateful-react-proc node)))
-         (when react
+         (when (and react (subscribed? node msg))
            (catch #t
              (lambda ()
                (let ((cmd (react node msg)))
@@ -309,7 +319,17 @@ Returns a single cmd (a batch of all collected cmds, or #f if none)."
                    (run-cmd! eng cmd)
                    #t))))))))
    ((and (mouse? msg) (eq? (mouse-action msg) 'motion))
-    (note-mouse-pos! eng msg))
+    ;; Motion always updates the tracked cursor (for hover restyle). If
+    ;; a button is held (low 2 bits != 3 = "no button"), also cascade so
+    ;; drag-to-X tools (paint, lasso-select, …) get the stream. Naked
+    ;; hover-only motion stops at the position update.
+    (let ((moved? (note-mouse-pos! eng msg))
+          (drag?  (not (= 3 (logand (mouse-button msg) 3)))))
+      (when drag?
+        (let* ((m   (apply-filter eng msg))
+               (cmd (and m (cascade! eng m))))
+          (run-cmd! eng cmd)))
+      (or moved? drag?)))
    ((or (key? msg) (mouse? msg))
     (when (mouse? msg) (note-mouse-pos! eng msg))
     (receive (action new-km) (feed-key (engine-keymap eng) msg)

@@ -14,6 +14,11 @@
             spinner-moon
             spinner-arrow))
 
+;; A spinner is an exemplar for the cmd flow: on <init> it returns
+;; (every #:hz 10 …) so the engine spawns a ticker fiber on its
+;; behalf. Each <tick> advances frame-idx. View renders the current
+;; frame. No user wiring required — drop one into a vbox and it spins.
+
 (define spinner-dots   '("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"))
 (define spinner-line   '("-" "\\" "|" "/"))
 (define spinner-circle '("◐" "◓" "◑" "◒"))
@@ -23,14 +28,22 @@
 (define-node spinner
   #:state ((frames spinner-dots)
            (frame-idx 0)
-           (face 'accent))
-  #:view (lambda (s)
-           (let ((fr (spinner-frames s)))
-             (txt (list-ref fr (modulo (spinner-frame-idx s) (length fr)))
-                  #:fg (spinner-face s))))
+           (face 'accent)
+           (hz  10))
+  #:subscribes (init? tick?)
+  #:view  (lambda (s)
+            (let ((fr (spinner-frames s)))
+              (txt (list-ref fr (modulo (spinner-frame-idx s) (length fr)))
+                   #:fg (spinner-face s))))
   #:react (lambda (s msg)
-            (when (tick? msg)
-              (set! (spinner-frame-idx s (+ 1 (spinner-frame-idx s))))))
+            (cond
+             ((init? msg)
+              ;; on first dispatch, install a ticker; engine runs the cmd.
+              (every #:hz (spinner-hz s) (lambda () (tick))))
+             ((tick? msg)
+              (set! (spinner-frame-idx s) (+ 1 (spinner-frame-idx s)))
+              #f))))
 
 (define (spinner-tick! s)
-  (set! (spinner-frame-idx s (+ 1 (spinner-frame-idx s))))
+  (set! (spinner-frame-idx s) (+ 1 (spinner-frame-idx s)))
+  s)

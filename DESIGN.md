@@ -111,12 +111,35 @@ generates:
   `<stateful>`
 
 Required: `#:state` (use `#:state ()` for stateless) and `#:view`.
-`#:react` and `#:init` are optional.
+`#:react`, `#:init`, and `#:subscribes` are optional.
 
 `view-proc` should be pure. The cascade walker calls it to find the
 node's children before the renderer calls it to produce cmds; side
 effects fire twice. Read `(*frame-size*)` inside view if the layout
 needs to know the terminal size.
+
+### `#:subscribes` — msg filtering
+
+By default, every msg reaches every stateful node's `react-proc`. A
+node that only cares about a few msg types can declare them:
+
+```scheme
+(define-node spinner
+  #:state ((frame-idx 0))
+  #:subscribes (init? tick?)
+  #:view  (lambda (s) (txt (current-frame s)))
+  #:react (lambda (s msg)
+            (cond
+             ((init? msg) (every #:hz 10 (lambda () (tick))))
+             ((tick? msg) (set! (spinner-frame-idx s)
+                                (+ 1 (spinner-frame-idx s))) #f))))
+```
+
+The cascade calls each predicate in turn; if any returns truthy, the
+node receives the msg. Omitting `#:subscribes` (or setting it to `()`)
+keeps the receive-all behaviour. Bundled predicates: `key?`, `mouse?`,
+`tick?`, `resize?`, `init?`, `focus?`, `blur?`, `resume?`. Any unary
+predicate procedure works — `symbol?`, your own `(lambda (m) …)`.
 
 ## Msgs
 

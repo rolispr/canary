@@ -4,6 +4,7 @@
   #:use-module (canary protocol)
   #:use-module (canary key)
   #:use-module (ice-9 match)
+  #:use-module (srfi srfi-1)
   #:export (<paginator-state>
             paginator?
             make-paginator
@@ -25,6 +26,7 @@
            (active-dot "•")
            (inactive-dot "○")
            (arabic-format "~d/~d"))
+  #:subscribes (key?)
   #:view
   (lambda (p)
     (case (paginator-type p)
@@ -32,23 +34,23 @@
       (else   (paginator-arabic-view p))))
   #:react
   (lambda (p msg)
-    (when (key? msg)
-      (let ((k (key-sym msg)))
-        (match k
-          ((or 'right 'page-down) (paginator-next-page! p))
-          ((or 'left  'page-up)   (paginator-prev-page! p))
-          (_ (cond
-              ((and (char? k) (char=? k #\l)) (paginator-next-page! p))
-              ((and (char? k) (char=? k #\h)) (paginator-prev-page! p)))))))))
+    (let ((k (key-sym msg)))
+      (match k
+        ((or 'right 'page-down)         (paginator-next-page! p))
+        ((or 'left  'page-up)           (paginator-prev-page! p))
+        ((? (lambda (c) (and (char? c) (char=? c #\l)))) (paginator-next-page! p))
+        ((? (lambda (c) (and (char? c) (char=? c #\h)))) (paginator-prev-page! p))
+        (_ #f))
+      #f)))
 
 (define (paginator-prev-page! p)
   (when (> (paginator-page p) 0)
-    (set! (paginator-page p (- (paginator-page p) 1)))
+    (set! (paginator-page p) (- (paginator-page p) 1)))
   p)
 
 (define (paginator-next-page! p)
   (when (< (paginator-page p) (- (paginator-total-pages p) 1))
-    (set! (paginator-page p (+ (paginator-page p) 1)))
+    (set! (paginator-page p) (+ (paginator-page p) 1)))
   p)
 
 (define (paginator-on-first-page? p) (= (paginator-page p) 0))
@@ -78,5 +80,3 @@
   (let ((current (+ 1 (paginator-page p)))
         (total   (paginator-total-pages p)))
     (txt (format #f "~d/~d" current total) #:fg 'muted)))
-
-(use-modules (srfi srfi-1))

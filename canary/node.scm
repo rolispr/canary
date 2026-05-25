@@ -27,6 +27,9 @@
 ;;           generated setters; return #f or a cmd (see canary/cmd).
 ;; #:init  — optional; receives wrapper, called once before first render.
 ;;           Mutate state in place; return value is discarded.
+;; #:subscribes — optional list of msg predicates (key?, tick?, init?, …);
+;;           when present, the engine cascade skips this node for msgs
+;;           none of the predicates match. Default: receive all msgs.
 ;;
 ;; Accessors take the <stateful> wrapper, not the inner state record —
 ;; authors never touch the inner record. (counter-n self) reads;
@@ -69,6 +72,11 @@
                              ((null? rest) #f)
                              ((eq? (car rest) #:init) (cadr rest))
                              (else (lp (cddr rest))))))
+              (subs-expr  (let lp ((rest kws))
+                            (cond
+                             ((null? rest) #f)
+                             ((eq? (car rest) #:subscribes) (cadr rest))
+                             (else (lp (cddr rest))))))
               (slots      (map car state))
               (inits      (map cadr state)))
          (with-syntax
@@ -85,18 +93,19 @@
               ((pub-set ...)     (map (lambda (s) (id #'name "set-" name-sym "-" s "!")) slots))
               (view-form    (datum->syntax #'name view-expr))
               (react-form   (datum->syntax #'name react-expr))
-              (init-form    (datum->syntax #'name init-expr)))
+              (init-form    (datum->syntax #'name init-expr))
+              (subs-form    (datum->syntax #'name
+                                           (and subs-expr `(list ,@subs-expr)))))
            #'(begin
                (define-record-type rec-type
                  (rec-make slot ...)
                  rec-pred
                  (slot priv-acc priv-set) ...)
-               ;; Explicit setter procs — useful when callers prefer
-               ;; named mutation over generalized-variable form.
-               (define (pub-set self v) (priv-set (stateful-state self) v))
-               ...
-               ;; Generalized-variable accessor: works as `(pub-acc self)`
-               ;; (read) AND `(set! (pub-acc self) v)` (write).
+               ;; ONE mutation idiom: a getter-with-setter accessor.
+               ;; (foo-x node)        — read
+               ;; (set! (foo-x node) v) — write
+               ;; Same shape as goops accessors. No separate set-foo-x!
+               ;; proc to memorize.
                (define pub-acc
                  (getter-with-setter
                   (lambda (self) (priv-acc (stateful-state self)))
@@ -108,4 +117,5 @@
                  (make-stateful (rec-make slot ...)
                                 view-form
                                 #:react-proc react-form
-                                #:init-proc  init-form)))))))))
+                                #:init-proc  init-form
+                                #:subscribes subs-form)))))))))

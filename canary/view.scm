@@ -162,6 +162,7 @@
             stateful-view-proc
             stateful-react-proc
             stateful-init-proc
+            stateful-subscribes
             stateful-initialized? set-stateful-initialized?!))
 
 (define-record-type <rect>
@@ -395,31 +396,41 @@ swap glyphs, wrap with overlay, return a static replacement node."
 ;; `define-node` macro (canary/node.scm) rather than calling
 ;; make-stateful directly.
 (define-record-type <stateful>
-  (%stateful state view-proc react-proc init-proc initialized? cache)
+  (%stateful state view-proc react-proc init-proc subscribes
+             initialized? cache)
   stateful?
   (state         stateful-state         set-stateful-state!)
   (view-proc     stateful-view-proc)
   (react-proc    stateful-react-proc)
   (init-proc     stateful-init-proc)
+  ;; A list of msg predicates (key?, mouse?, tick?, init?, …) that this
+  ;; node is interested in. The engine cascade only calls react when
+  ;; some predicate accepts the msg. #f or '() = receive everything.
+  (subscribes    stateful-subscribes)
   (initialized?  stateful-initialized?  set-stateful-initialized?!)
   (cache         stateful-cache         set-stateful-cache!))
 
 (define* (make-stateful state view-proc
-                        #:key (react-proc #f) (init-proc #f))
+                        #:key (react-proc #f) (init-proc #f) (subscribes #f))
   "Create a stateful node. VIEW-PROC is (lambda (self) → child-node);
 inside it, the author can read (*frame-size*) for the current terminal
 size if their layout needs it. REACT-PROC is (lambda (self msg) → #f
-or cmd); state mutates in place through `define-node`-generated
-setters, the return is interpreted as a cmd (or #f). INIT-PROC is
-(lambda (self) → unspecified) called once before first render — mutate
-self in place; the return is discarded."
+or cmd); state mutates in place, the return is a cmd or #f. INIT-PROC
+is (lambda (self) → unspecified) called once before first render —
+mutate self in place; return discarded. SUBSCRIBES is an optional list
+of msg predicates (key?, tick?, init?, …); when set, the engine cascade
+only delivers msgs matching one of them, dropping cascade cost from
+O(N) to O(interested-N) per event."
   (unless (procedure? view-proc)
     (error "make-stateful: VIEW-PROC must be a procedure" view-proc))
   (when (and react-proc (not (procedure? react-proc)))
     (error "make-stateful: REACT-PROC must be a procedure" react-proc))
   (when (and init-proc (not (procedure? init-proc)))
     (error "make-stateful: INIT-PROC must be a one-arg procedure" init-proc))
-  (%stateful state view-proc react-proc init-proc #f #f))
+  (when (and subscribes (not (list? subscribes)))
+    (error "make-stateful: SUBSCRIBES must be a list of predicate procs"
+           subscribes))
+  (%stateful state view-proc react-proc init-proc subscribes #f #f))
 
 (define (view-node? x)
   (or (text-node? x) (text-runs-node? x)
