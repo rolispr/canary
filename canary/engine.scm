@@ -1,7 +1,18 @@
 (define-module (canary engine)
   #:use-module (canary engine-types)
   #:use-module (canary terminal)
-  #:use-module (canary protocol)
+  #:use-module ((canary protocol) #:select (<size> size size? size-width size-height
+                                            <mouse> mouse mouse? mouse-x mouse-y
+                                            mouse-button mouse-action
+                                            <key> key? key-sym key-mods
+                                            <tick> tick tick? tick-n
+                                            <resize> resize resize? resize-width resize-height
+                                            <init> init?
+                                            batch sequence batch? sequence?
+                                            every every? after after?
+                                            set-title cursor alt-screen mouse-mode
+                                            println suspend exec set-palette cycle-palette
+                                            clear-log resumed))
   #:use-module (canary input)
   #:use-module (canary backend)
   #:use-module (canary backend-ansi)
@@ -26,7 +37,7 @@
   #:use-module (ice-9 match)
   #:use-module (ice-9 binary-ports)
   #:use-module (rnrs bytevectors)
-  #:use-module (srfi srfi-1)
+  #:use-module ((srfi srfi-1) #:select (take partition))
   #:use-module (srfi srfi-9)
   #:use-module (system foreign)
   #:use-module (oop goops)
@@ -543,7 +554,7 @@ session server) owns those."
   ;; subscriptions, etc.) before any user input arrives. Then a resize
   ;; with the current backend size so the first render lays out
   ;; correctly.
-  (send eng (init))
+  (send eng (make <init>))
   (let ((sz (backend-size (engine-backend eng))))
     (send eng (resize (size-width sz) (size-height sz))))
   (perform-operation
@@ -602,7 +613,7 @@ backend, plus log-overlay config."
                (spawn-fiber (guarded 'event-loop (lambda () (event-loop eng))))
                (spawn-fiber (guarded 'input-loop (lambda () (input-loop eng))))
                ;; <init> first → root react returns startup cmds.
-               (send eng (init))
+               (send eng (make <init>))
                (let ((sz (backend-size (engine-backend eng))))
                  (send eng (resize (size-width sz) (size-height sz))))
                (spawn-fiber

@@ -37,8 +37,6 @@
 (define (load-cmd d)
   (lambda () `(dired-loaded ,(read-dir (dired-path d)))))
 
-(define-method (init (d <dired>)) (load-cmd d))
-
 (define-method (view (d <dired>) sz)
   (let* ((es  (dired-entries d))
          (cur (dired-cursor d)))
@@ -91,6 +89,9 @@
               (set! (dired-status d) (string-append "file: " full))
               (values d #f))))))))
      (else (values d #f)))))
+
+(define-method (update (d <dired>) (msg <init>) sz)
+  (values d (load-cmd d)))
 
 (define-method (update (d <dired>) msg sz)
   (cond

@@ -2,7 +2,7 @@
   #:use-module (canary width)
   #:use-module (srfi srfi-9)
   #:use-module (oop goops)
-  #:export (view update init
+  #:export (view update
             with-view-cache memoized-view invalidate-cached-view!
             <rect>
             rect?
@@ -373,7 +373,10 @@ swap glyphs, wrap with overlay, return a static replacement node."
 
 (define-generic view)
 (define-generic update)
-(define-generic init)
+
+;; Default so a node that doesn't specialize `update` still participates
+;; in the cascade without a no-applicable-method error.
+(define-method (update node msg sz) (values node #f))
 
 (define %view-cache (make-parameter #f))
 

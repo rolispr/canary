@@ -56,13 +56,18 @@
     (native-inputs (list guile-next gcc-toolchain))
     (inputs (list guile-next guile-fibers))
     (propagated-inputs (list guile-fibers))
-    (synopsis "Composable TUI library for Guile")
+    (synopsis "Live-reloadable TUI library for Guile")
     (description
-     "Bubble-Tea-shaped TUI library for Guile. View functions return a tree of
-view nodes; a renderer flattens that tree to draw commands; a pluggable backend
-(ANSI today, future test/web) translates commands to bytes. Faces are symbolic
-and resolved by the backend.  Keymap layer with multi-chord sequences.  Built
-on guile-fibers.")
+     "Elm-shaped TUI library for Guile.  An app is a GOOPS class with two
+generics: @code{view} returns a tree of nodes from state and a size; @code{update}
+mutates state and returns a cmd.  Startup cmds, key handling, ticks and resizes
+are all msgs dispatched through @code{update}.  Layout primitives (vbox, hbox,
+boxed, pad, align, width, height, overlay, pin, on-click, on-hover) are pure
+records.  A pluggable backend translates draw cmds to bytes; the ANSI backend
+includes a cell-diff renderer, kitty graphics, symbolic palette-resolved faces
+and a multi-chord keymap.  Re-evaluating a @code{define-method} or
+@code{define-class} updates the running process without restart.  Built on
+guile-fibers.")
     (home-page "https://github.com/bretfhorne/guile-canary")
     (license l:gpl3+)))
 

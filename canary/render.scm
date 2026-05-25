@@ -125,7 +125,7 @@
         (else
          (let* ((child (car cs))
                 (s  (if (is-a? child <object>)
-                        (cons (rect-w rect) remaining)
+                        (view-size (memoized-view child (size (rect-w rect) remaining)))
                         (view-size child)))
                 (cw (min (car s) (rect-w rect)))
                 (ch (min (cdr s) remaining))
@@ -145,7 +145,7 @@
         (else
          (let* ((child (car cs))
                 (s  (if (is-a? child <object>)
-                        (cons remaining (rect-h rect))
+                        (view-size (memoized-view child (size remaining (rect-h rect))))
                         (view-size child)))
                 (cw (min (car s) remaining))
                 (ch (min (cdr s) (rect-h rect)))

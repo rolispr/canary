@@ -45,19 +45,26 @@ That's everything. A GOOPS class for state, methods for `view` and
 
 ## Architecture
 
-Three generics drive every node:
+Two generics drive every node:
 
 ```
 view   : (lambda (self sz)     → child-node)
 update : (lambda (self msg sz) → (values self cmd-or-#f))   ; optional
-init   : (lambda (self)        → cmd-or-#f)                 ; optional
 ```
 
-Specialise them on your class. Layout records (`txt`, `vbox`, `hbox`,
-`boxed`, `pad`, `align`, `width`, `height`, `overlay`, `pin`,
-`on-click`, `on-hover`) are pure data — no methods, no state. The
-renderer walks them by type-check. When it reaches a GOOPS instance
-in the tree, it calls `(view instance sz)` to expand.
+Specialise them on your class. Startup logic is just `update`
+specialised on the `<init>` msg:
+
+```scheme
+(define-method (update (c <my-app>) (msg <init>) sz)
+  (values c (load-cmd c)))           ; same (model, cmd) shape as every update
+```
+
+Layout records (`txt`, `vbox`, `hbox`, `boxed`, `pad`, `align`,
+`width`, `height`, `overlay`, `pin`, `on-click`, `on-hover`) are pure
+data — no methods, no state. The renderer walks them by type-check.
+When it reaches a GOOPS instance in the tree, it calls `(view instance
+sz)` to expand.
 
 The engine:
 
@@ -139,8 +146,8 @@ Multi-method dispatch on the msg class is the natural shape:
 
 ## Cmds
 
-Returned from `update` (second value) and `init`. Cmds are constructor
-calls, not quoted literals.
+Returned from `update` (second value). Cmds are constructor calls,
+not quoted literals.
 
 | cmd                                 | effect                                  |
 |-------------------------------------|-----------------------------------------|
@@ -292,7 +299,7 @@ Plain GOOPS classes in `canary/components/`:
 - `<button>` — title + on-click
 - `<panel>`  — title + border + footer + content, with hover affordance
 - `<textinput>` — single-line input with cursor
-- `<spinner>` — animated frames, installs its own ticker via `init`
+- `<spinner>` — animated frames, installs its own ticker on `<init>`
 - `<progress>` — bar with percentage
 - `<paginator>` — page indicator with key bindings
 
@@ -311,7 +318,8 @@ msgs into it automatically.
 - **Don't** poll for state changes. Every transition is a msg; every
   side-effect is a cmd.
 - **Don't** issue `(alt-screen 'on)` / `(cursor 'hide)` / `(set-title
-  …)` from `init` for the defaults. Pass them as kwargs to `run-app`.
+  …)` from your `<init>` update for the defaults. Pass them as kwargs
+  to `run-app`.
 - **Don't** side-effect inside `view`. The cascade walker calls it
   once to find children before render calls it again to produce
   cmds; any effect fires twice per msg.
@@ -322,7 +330,7 @@ msgs into it automatically.
 (use-modules (canary))
 ```
 
-Re-exports the public surface — `view`, `update`, `init` generics,
+Re-exports the public surface — `view`, `update` generics,
 layout primitives, theme/palette forms, keymap helpers, msg + cmd
 constructors, `run-app`, `send`, `<key>` / `<mouse>` / `<tick>` etc.
 See `canary.scm` for the full list.

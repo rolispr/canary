@@ -49,7 +49,7 @@
    <mouse> mouse mouse? mouse-x mouse-y mouse-button mouse-action
    <tick> tick tick? tick-n
    <resize> resize resize? resize-width resize-height
-   <init> init init?
+   <init> init?
    batch sequence batch? sequence?
    every every? after after?
    set-title cursor alt-screen mouse-mode clear-screen
