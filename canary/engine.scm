@@ -26,7 +26,8 @@
   #:use-module ((canary draw) #:select (make-clear clickable-cmd?
                                                    clickable-col clickable-row
                                                    clickable-w clickable-h
-                                                   clickable-action))
+                                                   clickable-action
+                                                   clickable-right-action))
   #:use-module ((canary layout) #:select (txt vbox width overlay pin))
   #:use-module ((canary borders) #:select (boxed border-rounded))
   #:use-module (fibers)
@@ -509,6 +510,17 @@ Routing policy:
 - everything else (<init>, <tick>, <resize>, user msgs) → cascade!"
   (cond
    ((eq? msg 'quit) (stop-engine! eng) #t)
+   ((resize? msg)
+    ;; Cache the new size on the backend, invalidate the diff baseline
+    ;; (prev-term) so the next frame is a full repaint at the new dims,
+    ;; then cascade so user code reacts.
+    (let ((b (engine-backend eng)))
+      (when (ansi-backend? b)
+        (set! (ansi-backend-size b)
+              (size (resize-width msg) (resize-height msg)))
+        (set! (ansi-backend-prev-term b) #f)))
+    (let ((cmd (cascade! eng msg)))
+      (run-cmd! eng cmd) #t))
    ((mouse-left-press? msg)
     (note-mouse-pos! eng msg)
     (let ((hit (find-click-region (engine-click-regions eng)
@@ -760,8 +772,13 @@ backend, plus log-overlay config."
             (setup-signal-handlers do-cleanup)
             (setup-resize-handler
              (lambda ()
-               (let ((sz (backend-size (engine-backend eng))))
-                 (when sz (send eng (resize (size-width sz) (size-height sz))))))))
+               ;; Ask the terminal for its new size via \e[18t. The
+               ;; response \e[8;rows;cols t flows through the normal
+               ;; input pipeline as a <resize> msg. Portable across
+               ;; macOS where TIOCGWINSZ can be unreliable.
+               (catch #t
+                 (lambda () (request-window-size! (engine-backend eng)))
+                 (lambda _ #f)))))
           (lambda ()
             (define (guarded name thunk)
               (lambda ()

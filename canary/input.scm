@@ -214,6 +214,17 @@ or a final letter.  Returns the synthesised event or 'unknown."
                      ;; ESC[1;mod{A-H,F,Z,P-S} — first param is usually 1
                      (let ((mod (and (pair? (cdr params)) (cadr params))))
                        (make-key sym (xterm-mod->mods (or mod 1))))))
+               ;; ESC[8;rows;cols t — reply to `\e[18t' window-size query.
+               ;; Surface as a <resize> so the engine takes the same path
+               ;; as SIGWINCH-driven resizes.
+               ((and (eqv? final #\t)
+                     (pair? params) (eqv? (car params) 8)
+                     (pair? (cdr params)) (pair? (cddr params)))
+                (let ((h (cadr params))
+                      (w (caddr params)))
+                  (if (and h w (positive? h) (positive? w))
+                      (resize w h)
+                      (key 'unknown))))
                (else (key 'unknown))))))
          (else
           (let drain ()

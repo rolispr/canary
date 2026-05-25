@@ -14,7 +14,7 @@
   #:use-module (oop goops)
   #:use-module (rnrs bytevectors)
   #:use-module (srfi srfi-1)
-  #:use-module ((srfi srfi-13) #:select (string-contains))
+  #:use-module ((srfi srfi-13) #:select (string-contains string-index))
   #:export (<ansi-backend>
             make-ansi-backend
             ansi-backend-theme
@@ -29,6 +29,7 @@
             face->sgr
             cmds->ansi
             render-cmds-to-term!
+            request-window-size!
             stats
             reset-stats!))
 
@@ -661,7 +662,11 @@ state, and a cached terminal size."
   (hash-clear! (ansi-backend-placements b))
   (set! (ansi-backend-next-image-id b) 1)
   (set! (ansi-backend-next-placement-id b) 1)
-  (let ((sz (get-terminal-size)))
+  ;; Prefer the portable escape-sequence probe (\e[18t → \e[8;r;ct).
+  ;; The TIOCGWINSZ ioctl is the fast path on Linux but isn't always
+  ;; reliable on macOS Terminal / Guile builds. Fall back to ioctl, then
+  ;; to the cached size, then to a safe 80x24 default.
+  (let ((sz (or (query-window-size! b) (get-terminal-size) (size 80 24))))
     (set! (ansi-backend-size b) sz)
     (set! (ansi-backend-cur-term b)  #f)
     (set! (ansi-backend-prev-term b) #f)))
@@ -682,6 +687,55 @@ reporting, restore cursor, leave the alt screen, and exit raw mode."
   (exit-raw-mode))
 
 (define-method (backend-size (b <ansi-backend>))
-  "Return the current terminal <size>, falling back to B's cached
-size if the live query fails."
-  (or (get-terminal-size) (ansi-backend-size b)))
+  "Return B's cached <size>. Updated at init via query-window-size!
+and on every <resize> msg the engine cascades."
+  (ansi-backend-size b))
+
+(define (request-window-size! b)
+  "Send the xterm `report window size in cells' query (\\e[18t) to B's
+output port. The terminal answers asynchronously with \\e[8;rows;cols t
+which the input parser turns into a <resize> msg. Used as the SIGWINCH
+side-channel on platforms where TIOCGWINSZ is unreliable."
+  (let ((out (ansi-backend-port b)))
+    (display "\x1b[18t" out)
+    (force-output out)))
+
+(define (query-window-size! b)
+  "Synchronously query B's terminal for its window size by emitting
+\\e[18t and reading the \\e[8;rows;cols t response. Returns a <size>
+or #f if the deadline expires. Used at init before fibers / input
+loops are running; consider it a one-shot probe."
+  (let ((in   (current-input-port))
+        (deadline-ms 250)
+        (start (get-internal-real-time))
+        (units internal-time-units-per-second))
+    (request-window-size! b)
+    (let loop ((buf '()) (saw-t? #f))
+      (cond
+       (saw-t?
+        (parse-window-size-response (list->string (reverse buf))))
+       ((char-ready? in)
+        (let ((ch (read-char in)))
+          (loop (cons ch buf) (eqv? ch #\t))))
+       (else
+        (let ((elapsed-ms (quotient (* (- (get-internal-real-time) start) 1000)
+                                     units)))
+          (if (>= elapsed-ms deadline-ms)
+              (parse-window-size-response (list->string (reverse buf)))
+              (begin (usleep 1000) (loop buf #f)))))))))
+
+(define (parse-window-size-response s)
+  "Pull rows/cols out of an \\e[8;rows;cols t response embedded in S.
+Returns a <size> or #f."
+  (let ((i (string-contains s "\x1b[8;")))
+    (and i
+         (let* ((tail (substring s (+ i 4)))
+                (t-idx (string-index tail #\t)))
+           (and t-idx
+                (let* ((body (substring tail 0 t-idx))
+                       (parts (string-split body #\;)))
+                  (and (= (length parts) 2)
+                       (let ((h (string->number (car parts)))
+                             (w (string->number (cadr parts))))
+                         (and h w (positive? h) (positive? w)
+                              (size w h))))))))))
