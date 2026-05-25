@@ -372,9 +372,9 @@ no-op — re-issuing the same sub from an update is idempotent."
       ('cycle-palette
        (theme-cycle! (engine-theme eng))
        (mark-dirty!))
-      ('clear-log-cmd
+      ('clear-log
        (set-engine-log-entries! eng '()))
-      ('suspend-cmd
+      ('suspend
        (backend-shutdown (engine-backend eng))
        (kill (getpid) 20)                                ; Linux SIGTSTP
        (backend-init (engine-backend eng))
@@ -559,19 +559,23 @@ Routing policy:
       (when (engine-running? eng)
         (perform-operation (wait-until-port-readable-operation rd))
         (drain-bell! (engine-msg-bell eng))
-        (with-view-cache
-         (make-hash-table)
-         (lambda ()
-           (let* ((msgs (drain-msgs! eng))
-                  (dispatched?
-                   (let lp ((ms msgs) (any? #f))
-                     (cond
-                      ((null? ms) any?)
-                      ((not (engine-running? eng)) any?)
-                      (else
-                       (let ((d? (process-one eng (car ms))))
-                         (lp (cdr ms) (or any? d?))))))))
-             (when (and (engine-running? eng) dispatched?)
+        ;; Cascade runs WITHOUT memoization — it descends into widgets
+        ;; at the backend size to find nested instances, which would
+        ;; pollute the cache and force render to see a backend-size
+        ;; tree instead of the rect-size tree it needs. render-frame
+        ;; gets its own cache below.
+        (let* ((msgs (drain-msgs! eng))
+               (dispatched?
+                (let lp ((ms msgs) (any? #f))
+                  (cond
+                   ((null? ms) any?)
+                   ((not (engine-running? eng)) any?)
+                   (else
+                    (let ((d? (process-one eng (car ms))))
+                      (lp (cdr ms) (or any? d?))))))))
+          (when (and (engine-running? eng) dispatched?)
+            (with-view-cache (make-hash-table)
+              (lambda ()
                (catch #t
                  (lambda () (render-frame eng))
                  (lambda (key . args)

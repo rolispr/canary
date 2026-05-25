@@ -164,8 +164,8 @@ Returns (#f #f) if the stream ends before a terminator."
         (%ilog "parse-csi-sequence: ch='~a' (code ~a)" ch (char->integer ch))
         (cond
          ((char=? ch #\<)         (parse-mouse-sequence port))
-         ((char=? ch #\I)         (focus))
-         ((char=? ch #\O)         (blur))
+         ((char=? ch #\I)         (focused))
+         ((char=? ch #\O)         (blurred))
          ((csi-letter->sym ch) => (lambda (sym) (key sym)))
          ((char-numeric? ch)
           (call-with-values (lambda () (read-csi-params-and-final port ch))

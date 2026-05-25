@@ -116,20 +116,70 @@
                        face))
       '()))
 
-;; Major-axis size of one box item before flex distribution. GOOPS
-;; items materialize via memoized-view at a probe size; layout items
-;; report their intrinsic size directly.
+;; Major-axis size of one box item before flex distribution. Descends
+;; through wrapper nodes (boxed, pad, margin, align, width, height,
+;; static, click, hover, flex) so the GOOPS instance buried inside is
+;; materialized at the right probe size and measured properly. Without
+;; this, view-size on (boxed goops) sees the goops's hard-coded (0,0)
+;; intrinsic and reports just the border overhead (2,2).
 (define (probe-major item probe-w probe-h axis)
   ;; axis 'v → return height; 'h → return width
-  (cond
-   ((flex-node? item)
-    (probe-major (flex-node-body item) probe-w probe-h axis))
-   (else
-    (let ((s (cond
-              ((is-a? item <object>)
-               (view-size (memoized-view item (size probe-w probe-h))))
-              (else (view-size item)))))
-      (if (eq? axis 'v) (cdr s) (car s))))))
+  (let ((major (lambda (s) (if (eq? axis 'v) (cdr s) (car s)))))
+    (cond
+     ((flex-node? item)
+      (probe-major (flex-node-body item) probe-w probe-h axis))
+     ((boxed-node? item)
+      (+ 2 (probe-major (boxed-node-child item)
+                        (max 0 (- probe-w 2)) (max 0 (- probe-h 2)) axis)))
+     ((pad-node? item)
+      (let* ((om (if (eq? axis 'v)
+                     (+ (pad-node-top item) (pad-node-bottom item))
+                     (+ (pad-node-left item) (pad-node-right item))))
+             (on (if (eq? axis 'v)
+                     (+ (pad-node-left item) (pad-node-right item))
+                     (+ (pad-node-top item) (pad-node-bottom item)))))
+        (+ om (probe-major (pad-node-child item)
+                           (max 0 (- probe-w (if (eq? axis 'v) on om)))
+                           (max 0 (- probe-h (if (eq? axis 'v) om on)))
+                           axis))))
+     ((margin-node? item)
+      (let* ((om (if (eq? axis 'v)
+                     (+ (margin-node-top item) (margin-node-bottom item))
+                     (+ (margin-node-left item) (margin-node-right item))))
+             (on (if (eq? axis 'v)
+                     (+ (margin-node-left item) (margin-node-right item))
+                     (+ (margin-node-top item) (margin-node-bottom item)))))
+        (+ om (probe-major (margin-node-child item)
+                           (max 0 (- probe-w (if (eq? axis 'v) on om)))
+                           (max 0 (- probe-h (if (eq? axis 'v) om on)))
+                           axis))))
+     ((width-node? item)
+      (if (eq? axis 'h)
+          (width-node-w item)
+          (probe-major (width-node-child item)
+                       (min probe-w (width-node-w item)) probe-h axis)))
+     ((height-node? item)
+      (if (eq? axis 'v)
+          (height-node-h item)
+          (probe-major (height-node-child item)
+                       probe-w (min probe-h (height-node-h item)) axis)))
+     ((align-node? item)
+      (probe-major (align-node-child item) probe-w probe-h axis))
+     ((static-node? item)
+      (probe-major (static-node-child item) probe-w probe-h axis))
+     ((click-node? item)
+      (probe-major (click-node-child item) probe-w probe-h axis))
+     ((hover-node? item)
+      (probe-major (hover-node-child item) probe-w probe-h axis))
+     ((is-a? item <object>)
+      ;; Probe at minimum size on the measured axis (1). Do NOT memoize:
+      ;; the probe-size tree must not leak into the render cache, or the
+      ;; subsequent real render call (at the actual rect size) hits the
+      ;; cached probe tree and renders at probe size instead.
+      (let ((pw (if (eq? axis 'h) 1 probe-w))
+            (ph (if (eq? axis 'v) 1 probe-h)))
+        (major (view-size (view item (size pw ph))))))
+     (else (major (view-size item))))))
 
 (define (flex-info item)
   (cond
@@ -225,9 +275,24 @@
    (else
     (let ((s (cond
               ((is-a? item <object>)
-               (view-size (memoized-view item (size probe-w probe-h))))
+               ;; Same anti-cache-pollution rationale as probe-major.
+               (view-size (view item (size probe-w probe-h))))
               (else (view-size item)))))
       (if (eq? axis 'v) (car s) (cdr s))))))
+
+;; Cross-axis sizing policy:
+;; Only a (flex …) wrapper fills the cross axis. Every other node —
+;; including bare GOOPS instances and layout containers like boxed —
+;; sizes to its content. Authors who want a box to span the full
+;; available width wrap it in flex: (flex (boxed widget)) fills both
+;; the major (grow) and cross axes.
+(define (fills-cross-axis? item)
+  (flex-node? item))
+
+(define (cross-size-for item pw ph full-cross axis)
+  (cond
+   ((fills-cross-axis? item) full-cross)
+   (else (min (probe-minor item pw ph axis) full-cross))))
 
 (define (render-vbox node rect mx my)
   (let ((face (vbox-node-face node))
@@ -246,8 +311,8 @@
               (else
                (let* ((it (car cs))
                       (ch (max 0 (min (car hs) remaining)))
-                      (cw (min (probe-minor it (rect-w rect) ch 'v)
-                               (rect-w rect)))
+                      (cw (cross-size-for it (rect-w rect) ch
+                                          (rect-w rect) 'v))
                       (sub (make-rect (rect-col rect) row cw ch))
                       (cmds (view->cmds it sub mx my)))
                  (loop (cdr cs) (cdr hs) (+ row ch) (- remaining ch)
@@ -270,8 +335,8 @@
               (else
                (let* ((it (car cs))
                       (cw (max 0 (min (car ws) remaining)))
-                      (ch (min (probe-minor it cw (rect-h rect) 'h)
-                               (rect-h rect)))
+                      (ch (cross-size-for it cw (rect-h rect)
+                                          (rect-h rect) 'h))
                       (sub (make-rect col (rect-row rect) cw ch))
                       (cmds (view->cmds it sub mx my)))
                  (loop (cdr cs) (cdr ws) (+ col cw) (- remaining cw)

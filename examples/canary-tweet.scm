@@ -150,8 +150,12 @@
            (hint   "#5a6378")
            (note   "#ff6b9d"))))
 
-(define-method (init (m <tweet>))
-  (every #:hz 12 (lambda () (tick))))
+;; Startup: tick the sprite at 12hz and put the textinput in the focus
+;; chain so the user's keys go there. The spinner installs its own
+;; ticker via its <init> method when the cascade reaches it.
+(define-method (update (m <tweet>) (msg <init>) sz)
+  (values m (batch (every #:hz 12 (lambda () (tick)))
+                   (focus (tweet-input m)))))
 
 (define (beak-pos sz)
   (let* ((cols (size-width  sz))
@@ -170,11 +174,13 @@
 (define-method (update (m <tweet>) (msg <tick>) sz)
   (set! (tweet-frame m) (+ (tweet-frame m) 1))
   (set! (tweet-notes m) (advance-notes! (tweet-notes m)))
-  (update (tweet-spin m) msg sz)
   (values m #f))
 
 (define-method (update (m <tweet>) (msg <key>) sz)
-  (update (tweet-input m) msg sz)
+  ;; The textinput is embedded in our view tree and focused at <init>,
+  ;; so the engine routes keys to it through the focus chain — no
+  ;; manual forward needed. We get the key too (we're on the chain as
+  ;; the root) and use it to spawn a floating note or clear on enter.
   (let ((ch (key-sym msg)))
     (cond
      ((eq? ch 'enter)
@@ -187,7 +193,7 @@
   (values m #f))
 
 (define (status-bar m cols)
-  (hbox (view (tweet-spin m) #f)
+  (hbox (tweet-spin m)            ; cascade renders + reaches it for <init>
         (txt "  tweeting..." #:fg 'accent #:bold)
         (spacer #:w (max 0 (- cols 26)))
         (txt (format #f "frame ~4d" (tweet-frame m)) #:fg 'muted)))
@@ -204,7 +210,7 @@
            (spacer top)
            (align sprite 'center #:width cols)
            (spacer 1)
-           (align (view (tweet-input m) sz) 'center #:width cols)
+           (align (tweet-input m) 'center #:width cols)
            (spacer 1)
            (align (txt "esc: quit" #:fg 'hint #:italic) 'center #:width cols))))
     (receive (bx by) (beak-pos sz)

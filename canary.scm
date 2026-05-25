@@ -50,6 +50,9 @@
    <tick> tick tick? tick-n
    <resize> resize resize? resize-width resize-height
    <init> init?
+   <focus> focused focused?
+   <blur>  blurred blurred?
+   <resume> resumed resumed?
    batch sequence batch? sequence?
    every every? after after?
    set-title cursor alt-screen mouse-mode clear-screen

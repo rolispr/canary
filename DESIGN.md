@@ -220,8 +220,8 @@ Engine-emitted records matched in `update`.
 | `<tick>`  | an `every` or `after` cmd fired               |
 | `<resize>`| terminal size changed                         |
 | `<init>`  | once before the first user input              |
-| `<focus>` | terminal gained focus                         |
-| `<blur>`  | terminal lost focus                           |
+| `<focus>` | terminal gained focus (msg ctor: `(focused)`) |
+| `<blur>`  | terminal lost focus  (msg ctor: `(blurred)`)  |
 | `<resume>`| engine reacquired tty after suspend           |
 | symbol    | keymap action; `on-click` action; user msg    |
 | list      | any user-defined shape via `(send eng …)`     |
@@ -379,10 +379,37 @@ Containers:
 (static child)                            ; cache rendered cmds keyed on rect
 (on-click action child)
 (on-hover child styler-proc)
+(flex    child #:grow 1 #:shrink 0)
 ```
 
 `pad` and `margin` are distinct: `pad` adds space *inside* a
 boxed/styled region, `margin` adds space *outside*.
+
+### Flex
+
+`flex` tags an item inside a vbox or hbox as flexible. The box first
+sums every item's intrinsic size along its major axis (height for
+vbox, width for hbox). Any surplus is shared among flex items by
+their `#:grow` shares; any deficit is shared by `#:shrink`. Items
+without `flex` keep their intrinsic size; `flex` outside a vbox/hbox
+is transparent.
+
+```scheme
+(vbox (txt "top bar")
+      (flex middle)                       ; absorbs leftover height
+      (txt "bottom bar"))
+
+(hbox sidebar
+      (flex canvas #:grow 1)
+      (flex preview #:grow 2))            ; canvas 1/3, preview 2/3
+```
+
+Defaults: `#:grow 1 #:shrink 0` → "take any extra, don't shrink past
+intrinsic". A bare `(flex x)` is the common case.
+
+Don't subtract terminal dimensions to size items by hand
+(`(width child (- cols 10))`). Wrap with `flex` and the box does the
+math, even across resizes.
 
 ## Bundled components
 

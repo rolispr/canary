@@ -42,7 +42,11 @@
   (let ((b (make-test-backend #:cols 30 #:rows 5)))
     (backend-draw b (render (vbox (txt "hello world") (boxed (txt "x"))) 30 5))
     (test-assert "finds hello" (test-backend-text? b "hello"))
-    (test-assert "finds boxed glyph" (test-backend-text? b "┌─┐"))
+    ;; vbox cross-axis stretches the boxed to full box width, so the
+    ;; top border is "┌" + 28 "─" + "┐". Find the corners explicitly.
+    (test-assert "finds top-left corner" (test-backend-text? b "┌"))
+    (test-assert "finds top-right corner" (test-backend-text? b "┐"))
+    (test-assert "finds bottom-left corner" (test-backend-text? b "└"))
     (test-assert "absent string returns #f" (not (test-backend-text? b "nothing")))))
 
 (test-group "find-text returns (col . row)"
