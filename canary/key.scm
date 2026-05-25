@@ -2,22 +2,26 @@
   #:use-module (oop goops)
   #:use-module (srfi srfi-1)
   #:export (<key> key key?
-            key-sym key-mods
+            key-sym key-mods key-event
             key=? key->string
             normalize-key))
 
 (define-class <key> ()
-  (sym  #:init-keyword #:sym  #:accessor key-sym)
-  (mods #:init-keyword #:mods #:accessor key-mods))
+  (sym   #:init-keyword #:sym   #:accessor key-sym)
+  (mods  #:init-keyword #:mods  #:accessor key-mods)
+  (event #:init-keyword #:event #:init-value 'press #:accessor key-event))
 
 (define (canon-mod m)
   "Return the canonical symbol for modifier alias M.  Recognised
-aliases: ctrl→control, meta/option→alt, cmd/command→super."
+aliases: ctrl→control, option→alt, cmd/command→super.  `meta` and
+`hyper` are their own modifiers (matches the kitty keyboard protocol)."
   (case m
-    ((control ctrl)        'control)
-    ((alt meta option)     'alt)
-    ((shift)               'shift)
-    ((super cmd command)   'super)
+    ((control ctrl)      'control)
+    ((alt option)        'alt)
+    ((shift)             'shift)
+    ((super cmd command) 'super)
+    ((meta)              'meta)
+    ((hyper)             'hyper)
     (else (error "key: unknown modifier" m))))
 
 (define (canon-mods mods)
@@ -55,6 +59,8 @@ set."
                      ((alt)     "A-")
                      ((shift)   "S-")
                      ((super)   "s-")
+                     ((meta)    "M-")
+                     ((hyper)   "H-")
                      (else (string-append (symbol->string m) "-"))))
                  (key-mods k)))
      (cond

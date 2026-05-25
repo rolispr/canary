@@ -18,9 +18,15 @@
 (test-assert "ctrl alias for control"
              (key=? (key #\a 'ctrl)
                     (key #\a 'control)))
-(test-assert "alt/meta alias"
+(test-assert "alt and meta are distinct"
+             (not (key=? (key #\a 'alt)
+                         (key #\a 'meta))))
+(test-assert "option is alt alias"
              (key=? (key #\a 'alt)
-                    (key #\a 'meta)))
+                    (key #\a 'option)))
+(test-assert "hyper is its own mod"
+             (key=? (key #\a 'hyper)
+                    (key #\a 'hyper)))
 (test-equal "string form with control" "C-x"   (key->string (key #\x 'control)))
 (test-equal "string form ctrl+alt"     "A-C-x" (key->string (key #\x 'alt 'control)))
 (test-equal "string form symbol key"   "A-tab" (key->string (key 'tab 'alt)))

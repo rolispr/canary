@@ -40,7 +40,7 @@ list.
          #:keymap (keymap (bind 'escape 'quit)))
 ```
 
-That's everything. A GOOPS class for state, methods for `view` and
+That's everything. A class for state, methods for `view` and
 `update`, `run-app` to launch.
 
 ## Architecture
@@ -48,7 +48,7 @@ That's everything. A GOOPS class for state, methods for `view` and
 Two generics drive every node:
 
 ```
-view   : (lambda (self)     → child-node)
+view   : (lambda (self)     → node)
 update : (lambda (self msg) → (values self cmd-or-#f))   ; optional
 ```
 
@@ -84,7 +84,7 @@ into its own slots and reads from there — same `(model, cmd)` shape:
 Layout records (`txt`, `vbox`, `hbox`, `boxed`, `pad`, `align`,
 `width`, `height`, `overlay`, `pin`, `on-click`, `on-hover`, `flex`,
 `wrap`) are pure data — no methods, no state. The renderer walks them
-by type-check. When it reaches a GOOPS instance in the tree, it calls
+by type-check. When it reaches a widget in the tree, it calls
 `(view instance)` to expand.
 
 The engine:
@@ -93,24 +93,24 @@ The engine:
 - reads input (keys, mouse) and emits typed msgs
 - renders `(view root)`, populates click regions, draws cell diffs
 - on each msg, walks the rendered tree and calls `(update node msg)`
-  on every GOOPS instance found
+  on every widget found
 - collects cmds from each update's second return value, batches them,
   runs them
 - spawns fibers for cmds that need them (`every`, `after`, user thunks)
 
-`run-app` takes any GOOPS instance and config kwargs. No `<app>` base
+`run-app` takes any widget and config kwargs. No `<app>` base
 class to subclass — your class inherits from whatever you want, or
 nothing.
 
 ### Composition
 
-`view` returns a tree of nodes — layout records and GOOPS instances
+`view` returns a tree of nodes — layout records and widgets
 mixed freely. **Embed widgets by instance reference, never by
-expanding them via `(view child)` in your own view.** The renderer
-calls `view` on a GOOPS instance for you; the cascade walks the tree
+expanding them via `(view body)` in your own view.** The renderer
+calls `view` on a widget for you; the cascade walks the tree
 and dispatches `update` on every instance it finds. There is no
 container that "doesn't support widgets": every layout primitive that
-takes a child also takes a GOOPS child.
+takes a node also takes a widget.
 
 ```scheme
 (define-class <chat> ()
@@ -151,7 +151,7 @@ it during cascade.
 ### Focus
 
 Key and mouse msgs are routed to the **focus chain** — a path of
-GOOPS instances from root to the currently focused widget — not
+widgets from root to the currently focused widget — not
 broadcast to every widget. This stops two `<textinput>`s in the same
 tree from both consuming a typed character.
 
@@ -286,13 +286,13 @@ not quoted literals.
 ## Click & hover
 
 ```scheme
-(on-click action child)
-(on-hover child styler-proc)
+(on-click action body)
+(on-hover body styler-proc)
 ```
 
-`on-click` wraps any child so a left-press inside its rendered area
-dispatches `action` as a msg. `on-hover` swaps `child` for
-`(styler-proc child)` whenever the cursor is inside the area — purely
+`on-click` wraps any body so a left-press inside its rendered area
+dispatches `action` as a msg. `on-hover` swaps `body` for
+`(styler-proc body)` whenever the cursor is inside the area — purely
 visual.
 
 ```scheme
@@ -388,20 +388,20 @@ Containers:
 (hbox a b c)
 (spacer n)                                ; height in vbox
 (spacer #:w n)                            ; width  in hbox
-(pad    child #:top n #:left n …)         ; inner whitespace
-(margin child #:top n #:left n …)         ; outer whitespace
-(align  child #:h 'left│'center│'right #:v 'top│'middle│'bottom
-              #:width n #:height n)        ; positions child within its rect
-(width  child n)
-(height child n #:valign 'top│'center│'bottom)
+(pad    body  #:top n #:left n …)         ; inner whitespace
+(margin body  #:top n #:left n …)         ; outer whitespace
+(align  body  #:h 'left│'center│'right #:v 'top│'middle│'bottom
+              #:width n #:height n)        ; positions body within its rect
+(width  body  n)
+(height body  n #:valign 'top│'center│'bottom)
 (fill   w h #:bg 'name-or-hex)
-(pin    col row child)
+(pin    col row body)
 (overlay base p1 p2 …)
-(boxed  child #:border border-rounded #:fg 'name #:title "name")
-(static child)                            ; cache rendered cmds keyed on rect
-(on-click action child)
-(on-hover child styler-proc)
-(flex    child #:grow 1 #:shrink 0)
+(boxed  body  #:border border-rounded #:fg 'name #:title "name")
+(static body)                            ; cache rendered cmds keyed on rect
+(on-click action body)
+(on-hover body styler-proc)
+(flex    body  #:grow 1 #:shrink 0)
 (wrap    "long text" #:fg 'name #:bold)   ; word-wraps to its rect's width
 ```
 
@@ -410,21 +410,21 @@ boxed/styled region, `margin` adds space *outside*.
 
 ### Align
 
-`align` positions a child within the rect it's been given. Modes on
+`align` positions a node within the rect it's been given. Modes on
 each axis:
 
 - horizontal: `'left` (default), `'center`, `'right`
 - vertical: `'top` (default), `'middle`, `'bottom`
 
 Pass either via kwargs (`#:h`, `#:v`) or positionally — the modes
-self-classify, so `(align child 'center)` is horizontal-center,
-`(align child 'middle)` is vertical-middle, `(align child 'center
+self-classify, so `(align body 'center)` is horizontal-center,
+`(align body 'middle)` is vertical-middle, `(align body 'center
 'middle)` is centered on both axes. `#:width` / `#:height` pin the
 alignment slot explicitly; otherwise it inherits the rect's full
 dimension on that axis.
 
-When the child overflows the slot, the anchored edge stays inside
-the rect and the opposite edge clips. `(align child #:v 'bottom)`
+When the node overflows the slot, the anchored edge stays inside
+the rect and the opposite edge clips. `(align body #:v 'bottom)`
 with a vbox of 1000 lines in a 24-row rect shows the last 24 lines
 — the top of the vbox renders off the rect and the term grid drops
 out-of-range writes. Same on the horizontal axis with `#:h 'right`.
@@ -460,7 +460,7 @@ Defaults: `#:grow 1 #:shrink 0` → "take any extra, don't shrink past
 intrinsic". A bare `(flex x)` is the common case.
 
 Don't subtract terminal dimensions to size items by hand
-(`(width child (- cols 10))`). Wrap with `flex` and the box does the
+(`(width body (- cols 10))`). Wrap with `flex` and the box does the
 math, even across resizes.
 
 ### Wrap
@@ -480,7 +480,7 @@ give it by wrapping in `flex` (or `(width …)` / `(height …)`).
 
 ## Bundled components
 
-Plain GOOPS classes in `canary/components/`:
+Plain widget classes in `canary/components/`:
 
 - `<button>` — title + on-click
 - `<panel>`  — title + border + footer + content, with hover affordance
@@ -508,7 +508,7 @@ msgs into it automatically.
   …)` from your `<init>` update for the defaults. Pass them as kwargs
   to `run-app`.
 - **Don't** side-effect inside `view`. The cascade walker calls it
-  once to find children before render calls it again to produce
+  once to find items before render calls it again to produce
   cmds; any effect fires twice per msg.
 
 ## Module surface

@@ -8,6 +8,7 @@
                                             <tick> tick tick? tick-n
                                             <resize> resize resize? resize-width resize-height
                                             <init> init?
+                                            <mount> mount <unmount> unmount
                                             batch sequence batch? sequence?
                                             every every? after after?
                                             set-title cursor alt-screen mouse-mode
@@ -48,6 +49,9 @@
             start-engine!
             send
             stop-engine!
+            refresh-live-widgets!
+            handle-resize!
+            resize-flushed?
             <log-entry> log-entry? log-entry-time log-entry-source
             log-entry-level log-entry-text
             log! engine-log!))
@@ -191,30 +195,30 @@ are logged, never raised."
 ;;; ── tree walker for msg cascade ────────────────────────────────────
 
 (define (walk-nodes node sz proc)
-  "Walk the view tree rooted at NODE, calling PROC on every GOOPS
-widget encountered.  Descends through layout containers; uses SZ
-when materialising lazy GOOPS subviews via memoized-view."
+  "Walk the view tree rooted at NODE, calling PROC on every widget
+encountered.  Descends through layout containers; uses SZ when
+materialising lazy widget subviews via memoized-view."
   (cond
    ((not node) #f)
    ((string? node) #f)
    ((vbox-node? node)
-    (for-each (lambda (c) (walk-nodes c sz proc)) (vbox-node-children node)))
+    (for-each (lambda (c) (walk-nodes c sz proc)) (vbox-node-items node)))
    ((hbox-node? node)
-    (for-each (lambda (c) (walk-nodes c sz proc)) (hbox-node-children node)))
-   ((boxed-node? node)   (walk-nodes (boxed-node-child node) sz proc))
-   ((pad-node? node)     (walk-nodes (pad-node-child node) sz proc))
-   ((margin-node? node)  (walk-nodes (margin-node-child node) sz proc))
-   ((align-node? node)   (walk-nodes (align-node-child node) sz proc))
-   ((width-node? node)   (walk-nodes (width-node-child node) sz proc))
-   ((height-node? node)  (walk-nodes (height-node-child node) sz proc))
-   ((static-node? node)  (walk-nodes (static-node-child node) sz proc))
-   ((click-node? node)   (walk-nodes (click-node-child node) sz proc))
-   ((hover-node? node)   (walk-nodes (hover-node-child node) sz proc))
+    (for-each (lambda (c) (walk-nodes c sz proc)) (hbox-node-items node)))
+   ((boxed-node? node)   (walk-nodes (boxed-node-body node) sz proc))
+   ((pad-node? node)     (walk-nodes (pad-node-body node) sz proc))
+   ((margin-node? node)  (walk-nodes (margin-node-body node) sz proc))
+   ((align-node? node)   (walk-nodes (align-node-body node) sz proc))
+   ((width-node? node)   (walk-nodes (width-node-body node) sz proc))
+   ((height-node? node)  (walk-nodes (height-node-body node) sz proc))
+   ((static-node? node)  (walk-nodes (static-node-body node) sz proc))
+   ((click-node? node)   (walk-nodes (click-node-body node) sz proc))
+   ((hover-node? node)   (walk-nodes (hover-node-body node) sz proc))
    ((flex-node? node)    (walk-nodes (flex-node-body node) sz proc))
    ((wrap-node? node)    #f)
    ((overlay-node? node)
     (walk-nodes (overlay-node-base node) sz proc)
-    (for-each (lambda (p) (walk-nodes (placement-child p) sz proc))
+    (for-each (lambda (p) (walk-nodes (placement-body p) sz proc))
               (overlay-node-overlays node)))
    ((is-a? node <object>)
     (proc node)
@@ -294,15 +298,18 @@ whether the next frame needs a re-render (e.g. for hover restyle)."
 
 (define (dispatch-update! eng node msg cmds-cell)
   "Call (update node msg). Collect any cmd into CMDS-CELL (a 1-cons
-list used as a mutable accumulator). Errors are logged, not raised."
+list used as a mutable accumulator). Errors are logged, not raised.
+Binds `%current-update-widget` so install-sub! can tag any
+subscriptions installed during this call with their owning widget."
   (catch #t
     (lambda ()
-      (call-with-values (lambda () (update node msg))
-        (lambda vs
-          (let ((cmd (cond ((null? vs) #f)
-                           ((null? (cdr vs)) #f)
-                           (else (cadr vs)))))
-            (when cmd (set-car! cmds-cell (cons cmd (car cmds-cell)))))))
+      (parameterize ((%current-update-widget node))
+        (call-with-values (lambda () (update node msg))
+          (lambda vs
+            (let ((cmd (cond ((null? vs) #f)
+                             ((null? (cdr vs)) #f)
+                             (else (cadr vs)))))
+              (when cmd (set-car! cmds-cell (cons cmd (car cmds-cell))))))))
       (invalidate-size! node)
       (invalidate-cached-view! node))
     (lambda (key . args)
@@ -318,7 +325,7 @@ so cmds run in collection order."
    (else               (cons 'batch (reverse cmds)))))
 
 (define (cascade! eng msg)
-  "Broadcast MSG to every GOOPS widget in ENG's tree (depth-first),
+  "Broadcast MSG to every widget in ENG's tree (depth-first),
 collecting their returned cmds.  Returns a single cmd (or #f) per
 cmds->batched.  Used for app-level msgs that should reach all
 widgets, not just the focused one."
@@ -330,11 +337,52 @@ widgets, not just the focused one."
      (lambda (node) (dispatch-update! eng node msg cmds-cell)))
     (cmds->batched (car cmds-cell))))
 
+(define (collect-live-widgets eng)
+  "Walk ENG's tree and return a hashq used as a set of every widget
+currently visible.  Identity-keyed so two widgets that happen to
+compare equal stay distinct."
+  (let ((seen (make-hash-table))
+        (sz   (backend-size (engine-backend eng))))
+    (walk-nodes (engine-root eng) sz
+                (lambda (node) (hashq-set! seen node #t)))
+    seen))
+
+(define (refresh-live-widgets! eng)
+  "Diff ENG's current tree against the previous frame's live set.
+Dispatch <mount> to widgets that just appeared and <unmount> to
+widgets that just departed; auto-cancel any subs the departing
+widgets owned.  Cmds returned by mount/unmount handlers are batched
+and run."
+  (let* ((seen (collect-live-widgets eng))
+         (live (engine-live-widgets eng))
+         (mounted   '())
+         (unmounted '()))
+    (hash-for-each
+     (lambda (w _) (unless (hashq-ref live w) (set! mounted (cons w mounted))))
+     seen)
+    (hash-for-each
+     (lambda (w _) (unless (hashq-ref seen w) (set! unmounted (cons w unmounted))))
+     live)
+    (when (or (pair? mounted) (pair? unmounted))
+      (let ((cmds-cell (list '())))
+        (for-each
+         (lambda (w) (dispatch-update! eng w (mount) cmds-cell))
+         mounted)
+        (for-each
+         (lambda (w)
+           (dispatch-update! eng w (unmount) cmds-cell)
+           (let ((ids (hashq-ref (engine-widget-subs eng) w '())))
+             (for-each (lambda (id) (cancel-sub! eng id)) ids)))
+         unmounted)
+        (let ((cmd (cmds->batched (car cmds-cell))))
+          (when cmd (run-cmd! eng cmd)))))
+    (set-engine-live-widgets! eng seen)))
+
 (define (find-focus-path root sz target)
-  "Walk the source tree from ROOT looking for the GOOPS instance TARGET.
-Return (root-most-goops … target) — the path of GOOPS instances from
+  "Walk the source tree from ROOT looking for the widget TARGET.
+Return (root-most-widget … target) — the path of widgets from
 the outermost ancestor down to TARGET inclusive — or #f if TARGET is
-not reachable. Layout records aren't in the path; only GOOPS nodes."
+not reachable. Layout records aren't in the path; only widget nodes."
   (define (try-list cs path)
     (cond ((null? cs) #f)
           (else (or (walk (car cs) path) (try-list (cdr cs) path)))))
@@ -342,22 +390,22 @@ not reachable. Layout records aren't in the path; only GOOPS nodes."
     (cond
      ((not node) #f)
      ((string? node) #f)
-     ((vbox-node? node)    (try-list (vbox-node-children node) path))
-     ((hbox-node? node)    (try-list (hbox-node-children node) path))
-     ((boxed-node? node)   (walk (boxed-node-child node) path))
-     ((pad-node? node)     (walk (pad-node-child node) path))
-     ((margin-node? node)  (walk (margin-node-child node) path))
-     ((align-node? node)   (walk (align-node-child node) path))
-     ((width-node? node)   (walk (width-node-child node) path))
-     ((height-node? node)  (walk (height-node-child node) path))
-     ((static-node? node)  (walk (static-node-child node) path))
-     ((click-node? node)   (walk (click-node-child node) path))
-     ((hover-node? node)   (walk (hover-node-child node) path))
+     ((vbox-node? node)    (try-list (vbox-node-items node) path))
+     ((hbox-node? node)    (try-list (hbox-node-items node) path))
+     ((boxed-node? node)   (walk (boxed-node-body node) path))
+     ((pad-node? node)     (walk (pad-node-body node) path))
+     ((margin-node? node)  (walk (margin-node-body node) path))
+     ((align-node? node)   (walk (align-node-body node) path))
+     ((width-node? node)   (walk (width-node-body node) path))
+     ((height-node? node)  (walk (height-node-body node) path))
+     ((static-node? node)  (walk (static-node-body node) path))
+     ((click-node? node)   (walk (click-node-body node) path))
+     ((hover-node? node)   (walk (hover-node-body node) path))
      ((flex-node? node)    (walk (flex-node-body node) path))
      ((wrap-node? node)    #f)
      ((overlay-node? node)
       (or (walk (overlay-node-base node) path)
-          (try-list (map placement-child (overlay-node-overlays node)) path)))
+          (try-list (map placement-body (overlay-node-overlays node)) path)))
      ((is-a? node <object>)
       (let ((new-path (cons node path)))
         (cond
@@ -398,26 +446,48 @@ poll."
   "Return #t if sub-cell C has been cancelled."
   (car c))
 
+;; The widget whose `update` is currently running, set by
+;; dispatch-update! so install-sub! can tag the resulting subscription
+;; with its owner.  When `update` returns, ownership goes back to #f
+;; (no owner — anonymous sub).
+(define %current-update-widget (make-parameter #f))
+
 (define (install-sub! eng id kind fiber-body)
   "Install a sub identified by ID. KIND is 'every / 'after — used to
 disambiguate in the subs hash (the cell value stores both for
 debugging). FIBER-BODY is a thunk that takes the stop cell and runs
 the producer loop. If ID is non-#f and already mapped, this is a
-no-op — re-issuing the same sub from an update is idempotent."
+no-op — re-issuing the same sub from an update is idempotent.  When
+called from inside a widget's update, the sub is also tagged with
+that widget so unmounting auto-cancels it."
   (cond
    ((and id (hash-ref (engine-subs eng) id)) #f)
    (else
-    (let ((cell (make-sub-cell)))
+    (let ((cell  (make-sub-cell))
+          (owner (%current-update-widget)))
       (when id (hash-set! (engine-subs eng) id cell))
+      (when (and owner id)
+        (let ((existing (hashq-ref (engine-widget-subs eng) owner '())))
+          (unless (member id existing)
+            (hashq-set! (engine-widget-subs eng) owner (cons id existing)))))
       (spawn-fiber (lambda () (fiber-body cell)))))))
 
 (define (cancel-sub! eng id)
-  "Cancel the sub on ENG tagged ID.  Stops its fiber and removes
-the entry from the subs hash.  No-op if ID isn't installed."
+  "Cancel the sub on ENG tagged ID.  Stops its fiber, removes the
+entry from the subs hash, and detaches it from its owning widget's
+sub list if any.  No-op if ID isn't installed."
   (let ((cell (hash-ref (engine-subs eng) id)))
     (when cell
       (sub-cell-stop! cell)
-      (hash-remove! (engine-subs eng) id))))
+      (hash-remove! (engine-subs eng) id)
+      (hash-for-each
+       (lambda (w ids)
+         (when (member id ids)
+           (let ((rest (filter (lambda (i) (not (equal? i id))) ids)))
+             (if (null? rest)
+                 (hashq-remove! (engine-widget-subs eng) w)
+                 (hashq-set!    (engine-widget-subs eng) w rest)))))
+       (engine-widget-subs eng)))))
 
 (define (apply-filter eng msg)
   "Pass MSG through ENG's filter procedure if any, otherwise return
@@ -557,6 +627,23 @@ cancel, plus all screen and app cmds.  Unknown cmds are dropped."
             (lambda (key . args) (cmd-error! eng key args 'thunk))))))
       (_ #f))))
 
+(define (handle-resize! eng msg)
+  "Apply a flushed <resize> MSG: cache new dims on the backend,
+invalidate the diff baseline, cascade to user code.  Called by the
+debounce fiber after quiescence, and directly during bootstrap."
+  (let ((b (engine-backend eng)))
+    (when (ansi-backend? b)
+      (set! (ansi-backend-size b)
+            (size (resize-width msg) (resize-height msg)))
+      (set! (ansi-backend-prev-term b) #f)))
+  (let ((cmd (cascade! eng msg)))
+    (run-cmd! eng cmd)))
+
+(define (resize-flushed? msg)
+  "Return #t if MSG is the internal wrapped form the debounce fiber
+re-emits after quiescence."
+  (and (pair? msg) (eq? (car msg) 'resize-flushed) (resize? (cdr msg))))
+
 (define (process-one eng msg)
   "Returns #t if anything reacted/should re-render, #f otherwise.
 
@@ -567,17 +654,17 @@ Routing policy:
 - everything else (<init>, <tick>, <resize>, user msgs) → cascade!"
   (cond
    ((eq? msg 'quit) (stop-engine! eng) #t)
+   ((resize-flushed? msg)
+    (handle-resize! eng (cdr msg)) #t)
    ((resize? msg)
-    ;; Cache the new size on the backend, invalidate the diff baseline
-    ;; (prev-term) so the next frame is a full repaint at the new dims,
-    ;; then cascade so user code reacts.
-    (let ((b (engine-backend eng)))
-      (when (ansi-backend? b)
-        (set! (ansi-backend-size b)
-              (size (resize-width msg) (resize-height msg)))
-        (set! (ansi-backend-prev-term b) #f)))
-    (let ((cmd (cascade! eng msg)))
-      (run-cmd! eng cmd) #t))
+    ;; Park the latest <resize> in the engine and wake the debounce
+    ;; fiber.  The fiber flushes a single <resize-flushed> back into
+    ;; the queue once 50 ms of quiescence passes — squashes drag-resize
+    ;; bursts down to one cascade + one full repaint.
+    (with-mutex (engine-pending-resize-mutex eng)
+      (set-engine-pending-resize! eng msg))
+    (ring! (engine-resize-bell eng))
+    #f)
    ((mouse-left-press? msg)
     (note-mouse-pos! eng msg)
     (let ((hit (find-click-region (engine-click-regions eng)
@@ -652,6 +739,18 @@ Routing policy:
                (cmd (and m (route-to-focus! eng m))))
           (run-cmd! eng cmd)))
       (or moved? drag?)))
+   ;; Key (and non-press mouse) routing. When focus is on something
+   ;; OTHER than the root widget — i.e. (engine-focus-chain eng) is
+   ;; non-empty — the app has explicitly handed keys to that widget
+   ;; (a textinput, modal dialog, etc.). Skip the keymap in that
+   ;; case so letter keys reach the focused widget instead of being
+   ;; eaten by an app-level binding. The keymap remains the fallback
+   ;; when nothing has focus.
+   ((and (key? msg)
+         (pair? (engine-focus-chain eng)))
+    (let* ((m (apply-filter eng msg))
+           (cmd (and m (route-to-focus! eng m))))
+      (run-cmd! eng cmd) #t))
    ((or (key? msg) (mouse? msg))
     (when (mouse? msg) (note-mouse-pos! eng msg))
     (receive (action new-km) (feed-key (engine-keymap eng) msg)
@@ -672,6 +771,33 @@ Routing policy:
            (cmd (and m (cascade! eng m))))
       (run-cmd! eng cmd)
       #t))))
+
+(define +resize-debounce-seconds+ 0.05)
+
+(define (resize-debounce-loop eng)
+  "Wait on ENG's resize-bell, then settle until 50 ms pass with no
+newer <resize> showing up in pending-resize.  When stable, send a
+wrapped <resize-flushed> back to the engine for the event-loop to
+cascade and re-render.  One coalesced flush per drag-resize burst."
+  (let ((rd (car (engine-resize-bell eng))))
+    (let loop ()
+      (when (engine-running? eng)
+        (perform-operation (wait-until-port-readable-operation rd))
+        (drain-bell! (engine-resize-bell eng))
+        (let settle ()
+          (let ((before (with-mutex (engine-pending-resize-mutex eng)
+                          (engine-pending-resize eng))))
+            (when before
+              (fiber-sleep +resize-debounce-seconds+)
+              (let ((after (with-mutex (engine-pending-resize-mutex eng)
+                             (engine-pending-resize eng))))
+                (cond
+                 ((eq? before after)
+                  (with-mutex (engine-pending-resize-mutex eng)
+                    (set-engine-pending-resize! eng #f))
+                  (send eng (cons 'resize-flushed before)))
+                 (else (settle)))))))
+        (loop)))))
 
 (define (event-loop eng)
   "Main message-processing loop for ENG.  Sleeps on the msg-bell,
@@ -699,6 +825,7 @@ frames."
                     (let ((d? (process-one eng (car ms))))
                       (lp (cdr ms) (or any? d?))))))))
           (when (and (engine-running? eng) dispatched?)
+            (refresh-live-widgets! eng)
             (with-view-cache (make-hash-table)
               (lambda ()
                (catch #t
@@ -794,15 +921,18 @@ session server) owns those."
                        (lambda (key . args)
                          (engine-log! eng name 'error (format #f "~a ~a" key args))
                          (stop-engine! eng)))))))
-    (spawn-fiber (guarded 'event-loop (lambda () (event-loop eng))))
-    (spawn-fiber (guarded 'input-loop (lambda () (input-loop eng)))))
+    (spawn-fiber (guarded 'event-loop     (lambda () (event-loop eng))))
+    (spawn-fiber (guarded 'input-loop     (lambda () (input-loop eng))))
+    (spawn-fiber (guarded 'resize-debounce (lambda () (resize-debounce-loop eng)))))
   ;; Send <init> first so root react can return startup cmds (timers,
   ;; subscriptions, etc.) before any user input arrives. Then a resize
   ;; with the current backend size so the first render lays out
-  ;; correctly.
+  ;; correctly.  Bootstrap resize bypasses the debounce — the first
+  ;; frame needs real dimensions before anything else can render.
   (send eng (make <init>))
   (let ((sz (backend-size (engine-backend eng))))
-    (send eng (resize (size-width sz) (size-height sz))))
+    (send eng (cons 'resize-flushed
+                    (resize (size-width sz) (size-height sz)))))
   (perform-operation
    (wait-until-port-readable-operation (car (engine-stop-ch eng))))
   (backend-shutdown (engine-backend eng)))
@@ -810,7 +940,7 @@ session server) owns those."
 (define* (run-app root #:key title (keymap #f) (theme #f) (mouse 'off)
                   (cursor 'hidden) (alt-screen? #t) (filter #f) (backend #f)
                   (show-log? #t) (log-cap 200) (log-height-frac 1/5))
-  "Run an app rooted at ROOT (a GOOPS instance with a `view' method).
+  "Run an app rooted at ROOT (a widget with a `view' method).
 Kwargs: title, keymap, theme, mouse, cursor, alt-screen?, filter,
 backend, plus log-overlay config."
   (let* ((b (or backend (make-ansi-backend #:theme (or theme default-theme))))
@@ -819,8 +949,9 @@ backend, plus log-overlay config."
          (eng (make-engine #:backend b #:theme th #:keymap km #:title title
                            #:mouse-mode mouse #:cursor cursor
                            #:alt-screen? alt-screen? #:filter filter #:root root
-                           #:msg-bell (make-bell-pipe)
-                           #:stop-ch  (make-bell-pipe)
+                           #:msg-bell     (make-bell-pipe)
+                           #:stop-ch      (make-bell-pipe)
+                           #:resize-bell  (make-bell-pipe)
                            #:log-cap log-cap #:show-log? show-log?
                            #:log-height-frac log-height-frac))
          (cleanup-done #f)
@@ -865,11 +996,13 @@ backend, plus log-overlay config."
                     (stop-engine! eng)))))
             (run-fibers
              (lambda ()
-               (spawn-fiber (guarded 'event-loop (lambda () (event-loop eng))))
-               (spawn-fiber (guarded 'input-loop (lambda () (input-loop eng))))
+               (spawn-fiber (guarded 'event-loop     (lambda () (event-loop eng))))
+               (spawn-fiber (guarded 'input-loop     (lambda () (input-loop eng))))
+               (spawn-fiber (guarded 'resize-debounce (lambda () (resize-debounce-loop eng))))
                (send eng (make <init>))
                (let ((sz (backend-size (engine-backend eng))))
-                 (send eng (resize (size-width sz) (size-height sz))))
+                 (send eng (cons 'resize-flushed
+                                 (resize (size-width sz) (size-height sz)))))
                (spawn-fiber
                 (lambda () (drain-stderr-pipe eng (car stderr-pipe))))
                (perform-operation

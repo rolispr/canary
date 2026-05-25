@@ -25,7 +25,7 @@
    make-spring-smooth make-spring-bouncy make-spring-gentle make-spring-snappy
    fps
 
-   <key> key key? key-sym key-mods key=? key->string
+   <key> key key? key-sym key-mods key-event key=? key->string
 
    view update
 
@@ -53,10 +53,13 @@
    <focus> focused focused?
    <blur>  blurred blurred?
    <resume> resumed resumed?
+   <paste> paste paste? paste-text
+   <mount> mount mount?
+   <unmount> unmount unmount?
    batch sequence batch? sequence?
    every every? after after?
    set-title cursor alt-screen mouse-mode clear-screen
    println suspend exec set-palette cycle-palette clear-log
-   focus cancel
+   focus cancel set-keymap
 
    view-size view-node?))

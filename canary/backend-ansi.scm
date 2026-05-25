@@ -654,13 +654,16 @@ the next frame diffs against this one."
 
 (define-method (backend-init (b <ansi-backend>))
   "Prepare the terminal for B: raw mode, alt screen, hidden cursor,
-focus reporting on, kitty-graphics capability probe, fresh image
-state, and a cached terminal size."
+focus reporting, bracketed paste, kitty keyboard disambiguation,
+kitty-graphics capability probe, fresh image state, and a cached
+terminal size."
   (enter-raw-mode)
   (enter-alternate-screen)
   (hide-cursor)
   (let ((out (ansi-backend-port b)))
     (display "\x1b[?1004h" out)  ; focus reporting on
+    (display "\x1b[?2004h" out)  ; bracketed paste on
+    (display "\x1b[>5u"    out)  ; kitty kbd: push flags 1+4 (disambiguate + report alternate keys)
     (force-output out))
   (set! (graphics? b) (detect-kitty-graphics! b))
   (hash-clear! (ansi-backend-image-ids b))
@@ -678,14 +681,17 @@ state, and a cached terminal size."
 
 (define-method (backend-shutdown (b <ansi-backend>))
   "Restore the terminal after B was running: delete all kitty
-placements and image storage (when graphics? was on), turn off focus
-reporting, restore cursor, leave the alt screen, and exit raw mode."
+placements and image storage (when graphics? was on), pop kitty
+keyboard flags, turn off bracketed paste and focus reporting,
+restore cursor, leave the alt screen, and exit raw mode."
   (let ((out (ansi-backend-port b)))
     (when (graphics? b)
       ;; a=d,d=A: delete all placements AND free image storage. Without
       ;; this the terminal holds onto sprite bytes forever.
       (display "\x1b_Ga=d,d=A\x1b\\" out))
-    (display "\x1b[?1004l" out)
+    (display "\x1b[<u"     out)  ; kitty kbd: pop flags
+    (display "\x1b[?2004l" out)  ; bracketed paste off
+    (display "\x1b[?1004l" out)  ; focus reporting off
     (force-output out))
   (show-cursor)
   (exit-alternate-screen)

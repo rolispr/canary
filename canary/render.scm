@@ -90,7 +90,7 @@ hover and click nodes; pass -1 for no pointer."
 (define (view->cmds node rect mx my)
   "Render NODE into RECT, with mouse position (MX, MY) used for
 hover/click hit-testing.  Returns a flat list of draw cmds.  The
-main recursion: dispatches on node kind, slices RECT for children,
+main recursion: dispatches on node kind, slices RECT for items,
 and threads MX/MY through."
   (cond
    ((rect-empty? rect) '())
@@ -130,19 +130,19 @@ and threads MX/MY through."
              (lambda (p)
                (let* ((col   (placement-col p))
                       (row   (placement-row p))
-                      (child (placement-child p))
-                      (s (view-size child))
+                      (body (placement-body p))
+                      (s (view-size body))
                       (cw (min (car s) (- (rect-w rect)
                                           (- col (rect-col rect)))))
                       (ch (min (cdr s) (- (rect-h rect)
                                           (- row (rect-row rect))))))
-                 (view->cmds child (make-rect col row cw ch) mx my)))
+                 (view->cmds body (make-rect col row cw ch) mx my)))
              (overlay-node-overlays node))))
    ((static-node? node)
     (let ((cached (static-node-cached-rect node)))
       (if (and cached (rect=? cached rect))
           (static-node-cached-cmds node)
-          (let ((cmds (view->cmds (static-node-child node) rect mx my)))
+          (let ((cmds (view->cmds (static-node-body node) rect mx my)))
             (set-static-node-cached-rect! node rect)
             (set-static-node-cached-cmds! node cmds)
             cmds))))
@@ -156,16 +156,16 @@ and threads MX/MY through."
                         (image-node-src node)
                         (image-node-fallback node)))))
    ((click-node? node)
-    (let ((child-cmds (view->cmds (click-node-child node) rect mx my)))
-      (append child-cmds
+    (let ((body-cmds (view->cmds (click-node-body node) rect mx my)))
+      (append body-cmds
               (list (make-clickable (rect-col rect) (rect-row rect)
                                     (rect-w rect) (rect-h rect)
                                     (click-node-action node)
                                     (click-node-right-action node))))))
    ((hover-node? node)
-    (let* ((child     (hover-node-child node))
+    (let* ((body     (hover-node-body node))
            (hot?      (rect-contains? rect mx my))
-           (effective (if hot? ((hover-node-styler node) child) child)))
+           (effective (if hot? ((hover-node-styler node) body) body)))
       (view->cmds effective rect mx my)))
    ((flex-node? node)
     (view->cmds (flex-node-body node) rect mx my))
@@ -196,16 +196,16 @@ or empty if FACE is #f.  Used to apply container background colours."
   "Return the major-axis size (in cells) of one box ITEM before
 flex distribution.  AXIS is 'v (return height) or 'h (return width).
 Descends through wrapper nodes (flex, boxed, pad, margin, width,
-height, align, static, click, hover) so the GOOPS instance buried
+height, align, static, click, hover) so the widget buried
 inside is materialised at the right probe size and measured
-properly.  Without this, view-size on (boxed goops) would see the
-goops's (0,0) intrinsic and report just the border overhead."
+properly.  Without this, view-size on (boxed widget) would see the
+widget's (0,0) intrinsic and report just the border overhead."
   (let ((major (lambda (s) (if (eq? axis 'v) (cdr s) (car s)))))
     (cond
      ((flex-node? item)
       (probe-major (flex-node-body item) probe-w probe-h axis))
      ((boxed-node? item)
-      (+ 2 (probe-major (boxed-node-child item)
+      (+ 2 (probe-major (boxed-node-body item)
                         (max 0 (- probe-w 2)) (max 0 (- probe-h 2)) axis)))
      ((pad-node? item)
       (let* ((om (if (eq? axis 'v)
@@ -214,7 +214,7 @@ goops's (0,0) intrinsic and report just the border overhead."
              (on (if (eq? axis 'v)
                      (+ (pad-node-left item) (pad-node-right item))
                      (+ (pad-node-top item) (pad-node-bottom item)))))
-        (+ om (probe-major (pad-node-child item)
+        (+ om (probe-major (pad-node-body item)
                            (max 0 (- probe-w (if (eq? axis 'v) on om)))
                            (max 0 (- probe-h (if (eq? axis 'v) om on)))
                            axis))))
@@ -225,28 +225,28 @@ goops's (0,0) intrinsic and report just the border overhead."
              (on (if (eq? axis 'v)
                      (+ (margin-node-left item) (margin-node-right item))
                      (+ (margin-node-top item) (margin-node-bottom item)))))
-        (+ om (probe-major (margin-node-child item)
+        (+ om (probe-major (margin-node-body item)
                            (max 0 (- probe-w (if (eq? axis 'v) on om)))
                            (max 0 (- probe-h (if (eq? axis 'v) om on)))
                            axis))))
      ((width-node? item)
       (if (eq? axis 'h)
           (width-node-w item)
-          (probe-major (width-node-child item)
+          (probe-major (width-node-body item)
                        (min probe-w (width-node-w item)) probe-h axis)))
      ((height-node? item)
       (if (eq? axis 'v)
           (height-node-h item)
-          (probe-major (height-node-child item)
+          (probe-major (height-node-body item)
                        probe-w (min probe-h (height-node-h item)) axis)))
      ((align-node? item)
-      (probe-major (align-node-child item) probe-w probe-h axis))
+      (probe-major (align-node-body item) probe-w probe-h axis))
      ((static-node? item)
-      (probe-major (static-node-child item) probe-w probe-h axis))
+      (probe-major (static-node-body item) probe-w probe-h axis))
      ((click-node? item)
-      (probe-major (click-node-child item) probe-w probe-h axis))
+      (probe-major (click-node-body item) probe-w probe-h axis))
      ((hover-node? item)
-      (probe-major (hover-node-child item) probe-w probe-h axis))
+      (probe-major (hover-node-body item) probe-w probe-h axis))
      ((is-a? item <object>)
       ;; Probe at minimum size on the measured axis (1). Do NOT memoize:
       ;; the probe-size tree must not leak into the render cache, or the
@@ -348,7 +348,7 @@ distribute deficit; equal-size case is identity."
 (define (probe-minor item probe-w probe-h axis)
   "Return the minor-axis size (in cells) of one box ITEM.  AXIS is
 'v (vbox; minor is width) or 'h (hbox; minor is height).  Mirrors
-probe-major's GOOPS handling so a tall GOOPS item in an hbox
+probe-major's widget handling so a tall widget in an hbox
 reports its natural width."
   (cond
    ((flex-node? item)
@@ -361,7 +361,7 @@ reports its natural width."
 
 (define (fills-cross-axis? item)
   "Return #t if ITEM should fill the box's cross axis.  Only `flex`
-wrappers do; everything else (including bare GOOPS instances and
+wrappers do; everything else (including bare widgets and
 layout containers like `boxed`) sizes to content.  To make a box
 span the full cross axis, wrap it: `(flex (boxed widget))`."
   (flex-node? item))
@@ -375,12 +375,12 @@ intrinsic minor size (probed with PW/PH along AXIS) and FULL-CROSS."
    (else (min (probe-minor item pw ph axis) full-cross))))
 
 (define (render-vbox node rect mx my)
-  "Render a <vbox-node> into RECT: probe each child's intrinsic
+  "Render a <vbox-node> into RECT: probe each body's intrinsic
 height, distribute surplus/deficit through flex grow/shrink, then
-render each child into its row slice with width per cross-axis
+render each body into its row slice with width per cross-axis
 policy."
   (let ((face (vbox-node-face node))
-        (items (vbox-node-children node)))
+        (items (vbox-node-items node)))
     (call-with-values (lambda () (measure-box items rect 'v))
       (lambda (majors grows shrinks total-h sum-grow sum-shrink)
         (let ((assigned (assigned-majors majors grows shrinks total-h
@@ -403,12 +403,12 @@ policy."
                        (append (reverse cmds) acc))))))))))))
 
 (define (render-hbox node rect mx my)
-  "Render an <hbox-node> into RECT: probe each child's intrinsic
+  "Render an <hbox-node> into RECT: probe each body's intrinsic
 width, distribute surplus/deficit through flex grow/shrink, then
-render each child into its column slice with height per cross-axis
+render each body into its column slice with height per cross-axis
 policy."
   (let ((face (hbox-node-face node))
-        (items (hbox-node-children node)))
+        (items (hbox-node-items node)))
     (call-with-values (lambda () (measure-box items rect 'h))
       (lambda (majors grows shrinks total-w sum-grow sum-shrink)
         (let ((assigned (assigned-majors majors grows shrinks total-w
@@ -453,7 +453,7 @@ doesn't fit."
 (define (render-boxed node rect mx my)
   "Render a <boxed-node>: emit the four border glyphs, the top run
 with optional title spliced in, the side runs, the bottom run, and
-recurse into the child within the inner rect.  Returns the empty
+recurse into the body within the inner rect.  Returns the empty
 list if RECT is too small for the border (less than 2×2)."
   (cond
    ((or (< (rect-w rect) 2) (< (rect-h rect) 2)) '())
@@ -488,11 +488,11 @@ list if RECT is too small for the border (less than 2×2)."
        (list (make-text col (+ row h -1)
                         (string-append (border-bl border) bot-mid (border-br border))
                         face '()))
-       (view->cmds (boxed-node-child node) inner-rect mx my))))))
+       (view->cmds (boxed-node-body node) inner-rect mx my))))))
 
 (define (render-pad node rect mx my)
   "Render a <pad-node>: paint the optional background face across
-RECT, then render the child into the shrunken inner rect derived
+RECT, then render the body into the shrunken inner rect derived
 from the pad amounts."
   (let* ((t (pad-node-top node))
          (r (pad-node-right node))
@@ -503,10 +503,10 @@ from the pad amounts."
                            (max 0 (- (rect-w rect) l r))
                            (max 0 (- (rect-h rect) t b)))))
     (append (bg-fill-cmds (pad-node-face node) rect)
-            (view->cmds (pad-node-child node) inner mx my))))
+            (view->cmds (pad-node-body node) inner mx my))))
 
 (define (render-margin node rect mx my)
-  "Render a <margin-node>: render the child into the shrunken
+  "Render a <margin-node>: render the body into the shrunken
 inner rect derived from the margin amounts.  Unlike pad, no
 background fill — margin cells are transparent."
   (let* ((t (margin-node-top    node))
@@ -517,7 +517,7 @@ background fill — margin cells are transparent."
                            (+ (rect-row rect) t)
                            (max 0 (- (rect-w rect) l r))
                            (max 0 (- (rect-h rect) t b)))))
-    (view->cmds (margin-node-child node) inner mx my)))
+    (view->cmds (margin-node-body node) inner mx my)))
 
 (define (render-text-runs node rect mx my)
   "Render a <text-runs-node>: lay the runs left to right on RECT's
@@ -538,19 +538,19 @@ stopping when RECT's width is exhausted."
         (loop (cdr runs) (+ col w) (append (reverse cmds) acc) (- rem w)))))))
 
 (define (render-align node rect mx my)
-  "Render an <align-node>: position the child within an alignment
-slot of the rect, on both axes.  When the child overflows on an
+  "Render an <align-node>: position the body within an alignment
+slot of the rect, on both axes.  When the body overflows on an
 axis, the anchored edge ('right or 'bottom or the centered halves)
 stays inside the slot and the opposite edge clips off-rect — useful
 for chat-style tail anchoring and right-aligned status info."
-  (let* ((child  (align-node-child node))
+  (let* ((body  (align-node-body node))
          (h-mode (align-node-h node))
          (v-mode (align-node-v node))
          (target-w (or (align-node-width  node) (rect-w rect)))
          (target-h (or (align-node-height node) (rect-h rect)))
-         (s (if (is-a? child <object>)
-                (view-size (view child))
-                (view-size child)))
+         (s (if (is-a? body <object>)
+                (view-size (view body))
+                (view-size body)))
          (cw (car s))
          (ch (cdr s))
          (slack-w (- target-w cw))    ; can be negative on overflow
@@ -567,16 +567,16 @@ for chat-style tail anchoring and right-aligned status info."
                          (+ (rect-row rect) offset-y)
                          cw
                          ch)))
-    (view->cmds child sub mx my)))
+    (view->cmds body sub mx my)))
 
 (define (render-width node rect mx my)
-  "Render a <width-node>: render the child into a target-width
+  "Render a <width-node>: render the body into a target-width
 slot (clamped to RECT's width) using the node's align mode for
-placement when the child is narrower."
+placement when the body is narrower."
   (let* ((target-w (min (width-node-w node) (rect-w rect)))
-         (child (width-node-child node))
+         (body (width-node-body node))
          (align (width-node-align node))
-         (s (view-size child))
+         (s (view-size body))
          (cw (min (car s) target-w))
          (slack (max 0 (- target-w cw)))
          (offset (case align
@@ -587,16 +587,16 @@ placement when the child is narrower."
                          (rect-row rect)
                          cw
                          (rect-h rect))))
-    (view->cmds child sub mx my)))
+    (view->cmds body sub mx my)))
 
 (define (render-height node rect mx my)
-  "Render a <height-node>: render the child into a target-height
+  "Render a <height-node>: render the body into a target-height
 slot (clamped to RECT's height) using the node's valign mode for
-placement when the child is shorter."
+placement when the body is shorter."
   (let* ((target-h (min (height-node-h node) (rect-h rect)))
-         (child (height-node-child node))
+         (body (height-node-body node))
          (valign (height-node-valign node))
-         (s (view-size child))
+         (s (view-size body))
          (ch (min (cdr s) target-h))
          (slack (max 0 (- target-h ch)))
          (offset (case valign
@@ -607,4 +607,4 @@ placement when the child is shorter."
                          (+ (rect-row rect) offset)
                          (rect-w rect)
                          ch)))
-    (view->cmds child sub mx my)))
+    (view->cmds body sub mx my)))

@@ -225,11 +225,72 @@ or a final letter.  Returns the synthesised event or 'unknown."
                   (if (and h w (positive? h) (positive? w))
                       (resize w h)
                       (key 'unknown))))
+               ;; CSI codepoint[;modifiers] u — kitty keyboard protocol.
+               ;; Emitted whenever the terminal honours the flags pushed
+               ;; by `\e[>Nu`; lets us disambiguate ctrl+i from tab,
+               ;; report plain Esc unambiguously, etc.
+               ((eqv? final #\u)
+                (parse-kitty-key params))
                (else (key 'unknown))))))
          (else
           (let drain ()
             (when (char-ready? port) (read-char port) (drain)))
           (key 'unknown))))))
+
+(define (kitty-mods->mods n)
+  "Decode a kitty CSI-u modifier param N (subtract 1, then bit-test:
+shift=1 alt=2 ctrl=4 super=8 hyper=16 meta=32).  Returns a list of
+canonical mod symbols."
+  (let ((bits (if (and (integer? n) (positive? n)) (- n 1) 0))
+        (mods '()))
+    (when (positive? (logand bits 1))  (set! mods (cons 'shift   mods)))
+    (when (positive? (logand bits 2))  (set! mods (cons 'alt     mods)))
+    (when (positive? (logand bits 4))  (set! mods (cons 'control mods)))
+    (when (positive? (logand bits 8))  (set! mods (cons 'super   mods)))
+    (when (positive? (logand bits 16)) (set! mods (cons 'hyper   mods)))
+    (when (positive? (logand bits 32)) (set! mods (cons 'meta    mods)))
+    mods))
+
+(define (kitty-codepoint->sym cp)
+  "Map a kitty CSI-u codepoint CP to a key symbol.  Plain ASCII
+becomes the char itself; control codes and the kitty functional
+range (57344+) map to named symbols (escape, tab, left, f1, …).
+Falls back to integer->char for anything else."
+  (cond
+   ((= cp 27)    'escape)
+   ((= cp 13)    'enter)
+   ((= cp 9)     'tab)
+   ((= cp 127)   'backspace)
+   ((and (>= cp 32) (< cp 127)) (integer->char cp))
+   ((= cp 57344) 'escape)
+   ((= cp 57345) 'enter)
+   ((= cp 57346) 'tab)
+   ((= cp 57347) 'backspace)
+   ((= cp 57348) 'insert)
+   ((= cp 57349) 'delete)
+   ((= cp 57350) 'left)
+   ((= cp 57351) 'right)
+   ((= cp 57352) 'up)
+   ((= cp 57353) 'down)
+   ((= cp 57354) 'pgup)
+   ((= cp 57355) 'pgdn)
+   ((= cp 57356) 'home)
+   ((= cp 57357) 'end)
+   ((and (>= cp 57364) (<= cp 57375))
+    (string->symbol (format #f "f~a" (- cp 57363))))
+   (else (integer->char cp))))
+
+(define (parse-kitty-key params)
+  "Build a <key> from a kitty CSI-u parameter list PARAMS.  Shape:
+`(codepoint [modifiers [text-codepoints ...]])`.  Subparams (the
+`:event-type` form) aren't enabled by canary's flag set, so this
+treats every event as a press."
+  (let* ((cp  (and (pair? params) (car params)))
+         (mod (and (pair? params) (pair? (cdr params)) (cadr params))))
+    (cond
+     ((not cp) (key 'unknown))
+     (else (make-key (kitty-codepoint->sym cp)
+                     (kitty-mods->mods (or mod 1)))))))
 
 (define (parse-ss3-sequence port)
   "Parse an SS3 (Single Shift 3) sequence after ESC O has been
@@ -300,10 +361,9 @@ a <mouse> event with 0-indexed coordinates."
         (key 'unknown))))
 
 (define (parse-bracketed-paste port)
-  "Consume a bracketed-paste payload (ESC[200~ has already been
-read) and discard it through to the ESC[201~ end marker.  Returns
-a single 'paste key event; the actual pasted text is currently
-dropped on the floor."
+  "Consume a bracketed-paste payload (ESC[200~ already read) up to
+the ESC[201~ end marker and return a <paste> event carrying the raw
+pasted string."
   (%ilog "parse-bracketed-paste: reading pasted text")
   (let ((text ""))
     (let loop ()
@@ -334,4 +394,4 @@ dropped on the floor."
             (set! text (string-append text (string ch)))
             (loop))))))
     (%ilog "parse-bracketed-paste: got ~d chars" (string-length text))
-    (key 'paste)))
+    (paste text)))

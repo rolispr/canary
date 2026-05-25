@@ -20,10 +20,10 @@
 (define (safe-read-dir path)
   (catch #t
     (lambda ()
-      (let ((kids (scandir path
-                           (lambda (n) (not (or (string=? n ".")
-                                                (string=? n "..")))))))
-        (cons ".." (or kids '()))))
+      (let ((entries (scandir path
+                              (lambda (n) (not (or (string=? n ".")
+                                                   (string=? n "..")))))))
+        (cons ".." (or entries '()))))
     (lambda _ '(".."))))
 
 (define (file-is-directory? p)
@@ -48,8 +48,8 @@
     (lambda ()
       (cond
        ((file-is-directory? path)
-        (let ((kids (or (scandir path) '())))
-          (string-join (take kids (min 40 (length kids))) "\n")))
+        (let ((entries (or (scandir path) '())))
+          (string-join (take entries (min 40 (length entries))) "\n")))
        (else
         (call-with-input-file path
           (lambda (port)

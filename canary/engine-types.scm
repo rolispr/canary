@@ -26,14 +26,21 @@
             engine-show-log?   set-engine-show-log?!
             engine-log-height-frac set-engine-log-height-frac!
             engine-focus-chain set-engine-focus-chain!
-            engine-subs))
+            engine-subs
+            engine-pending-resize set-engine-pending-resize!
+            engine-pending-resize-mutex
+            engine-resize-bell
+            engine-live-widgets set-engine-live-widgets!
+            engine-widget-subs))
 
 (define-record-type <engine>
   (%make-engine backend theme keymap title mouse-mode cursor alt-screen?
                 filter root running? msg-queue queue-mutex msg-bell
                 stop-ch click-regions mouse-x mouse-y
                 log-entries log-cap show-log? log-height-frac
-                focus-chain subs)
+                focus-chain subs
+                pending-resize pending-resize-mutex resize-bell
+                live-widgets widget-subs)
   engine?
   (backend     engine-backend         set-engine-backend!)
   (theme       engine-theme           set-engine-theme!)
@@ -57,20 +64,34 @@
   (show-log?   engine-show-log?       set-engine-show-log?!)
   (log-height-frac engine-log-height-frac set-engine-log-height-frac!)
   (focus-chain engine-focus-chain     set-engine-focus-chain!)
-  (subs        engine-subs))
+  (subs        engine-subs)
+  ;; Resize debounce: the latest <resize> seen since the last flush,
+  ;; mutex-guarded so the signal handler and the debounce fiber can
+  ;; race safely.  resize-bell wakes the fiber.
+  (pending-resize       engine-pending-resize       set-engine-pending-resize!)
+  (pending-resize-mutex engine-pending-resize-mutex)
+  (resize-bell          engine-resize-bell)
+  ;; Widget lifecycle: live-widgets is a hashq used as the set of
+  ;; widgets present in the most recent frame; widget-subs maps a
+  ;; widget to the list of sub ids it installed, so unmounting one
+  ;; cancels its tickers automatically.
+  (live-widgets engine-live-widgets   set-engine-live-widgets!)
+  (widget-subs  engine-widget-subs))
 
 (define* (make-engine #:key backend theme keymap title (mouse-mode 'off)
                       (cursor 'hidden) (alt-screen? #t) filter root
-                      msg-bell stop-ch
+                      msg-bell stop-ch resize-bell
                       (log-cap 200) (show-log? #t) (log-height-frac 1/5))
   "Return a fresh <engine> wired up with the supplied collaborators.
 BACKEND, THEME, KEYMAP, ROOT and the message-bell / stop-channel
 plumbing come from `start-engine!`; the rest are operational defaults
 controlling input mode, cursor visibility, alt-screen use, log overlay
 size, and the optional msg filter.  Mutable bookkeeping (queue, mouse
-position, click regions, log entries, focus chain, sub table) starts
-empty."
+position, click regions, log entries, focus chain, sub table, lifecycle
+trackers) starts empty."
   (%make-engine backend theme keymap title mouse-mode cursor alt-screen?
                 filter root #t '() (make-mutex) msg-bell
                 stop-ch '() -1 -1 '() log-cap show-log? log-height-frac
-                '() (make-hash-table)))
+                '() (make-hash-table)
+                #f (make-mutex) resize-bell
+                (make-hash-table) (make-hash-table)))

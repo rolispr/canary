@@ -46,19 +46,19 @@
             <vbox-node>
             vbox-node?
             make-vbox-node
-            vbox-node-children
+            vbox-node-items
             vbox-node-face
 
             <hbox-node>
             hbox-node?
             make-hbox-node
-            hbox-node-children
+            hbox-node-items
             hbox-node-face
 
             <boxed-node>
             boxed-node?
             make-boxed-node
-            boxed-node-child
+            boxed-node-body
             boxed-node-border
             boxed-node-face
             boxed-node-title
@@ -66,7 +66,7 @@
             <pad-node>
             pad-node?
             make-pad-node
-            pad-node-child
+            pad-node-body
             pad-node-top
             pad-node-right
             pad-node-bottom
@@ -76,7 +76,7 @@
             <margin-node>
             margin-node?
             make-margin-node
-            margin-node-child
+            margin-node-body
             margin-node-top
             margin-node-right
             margin-node-bottom
@@ -85,7 +85,7 @@
             <align-node>
             align-node?
             make-align-node
-            align-node-child
+            align-node-body
             align-node-h
             align-node-v
             align-node-width
@@ -94,14 +94,14 @@
             <width-node>
             width-node?
             make-width-node
-            width-node-child
+            width-node-body
             width-node-w
             width-node-align
 
             <height-node>
             height-node?
             make-height-node
-            height-node-child
+            height-node-body
             height-node-h
             height-node-valign
 
@@ -123,12 +123,12 @@
             make-placement
             placement-col
             placement-row
-            placement-child
+            placement-body
 
             <static-node>
             static-node?
             make-static-node
-            static-node-child
+            static-node-body
             static-node-cached-rect
             set-static-node-cached-rect!
             static-node-cached-cmds
@@ -153,12 +153,12 @@
             make-click-node
             click-node-action
             click-node-right-action
-            click-node-child
+            click-node-body
 
             <hover-node>
             hover-node?
             make-hover-node
-            hover-node-child
+            hover-node-body
             hover-node-styler
 
             <flex-node>
@@ -244,47 +244,47 @@ empty space."
   (%spacer-node w h #f))
 
 (define-record-type <vbox-node>
-  (%vbox-node children face cache)
+  (%vbox-node items face cache)
   vbox-node?
-  (children vbox-node-children)
+  (items vbox-node-items)
   (face vbox-node-face)
   (cache vbox-node-cache set-vbox-node-cache!))
 
-(define (make-vbox-node children face)
-  "Return a fresh <vbox-node> stacking CHILDREN top to bottom, with
+(define (make-vbox-node items face)
+  "Return a fresh <vbox-node> stacking ITEMS top to bottom, with
 optional FACE applied to the box's background."
-  (%vbox-node children face #f))
+  (%vbox-node items face #f))
 
 (define-record-type <hbox-node>
-  (%hbox-node children face cache)
+  (%hbox-node items face cache)
   hbox-node?
-  (children hbox-node-children)
+  (items hbox-node-items)
   (face hbox-node-face)
   (cache hbox-node-cache set-hbox-node-cache!))
 
-(define (make-hbox-node children face)
-  "Return a fresh <hbox-node> laying CHILDREN left to right, with
+(define (make-hbox-node items face)
+  "Return a fresh <hbox-node> laying ITEMS left to right, with
 optional FACE applied to the box's background."
-  (%hbox-node children face #f))
+  (%hbox-node items face #f))
 
 (define-record-type <boxed-node>
-  (%boxed-node child border face title cache)
+  (%boxed-node body border face title cache)
   boxed-node?
-  (child boxed-node-child)
+  (body boxed-node-body)
   (border boxed-node-border)
   (face boxed-node-face)
   (title boxed-node-title)
   (cache boxed-node-cache set-boxed-node-cache!))
 
-(define* (make-boxed-node child border face #:optional (title #f))
-  "Return a fresh <boxed-node> framing CHILD with BORDER drawn in
+(define* (make-boxed-node body border face #:optional (title #f))
+  "Return a fresh <boxed-node> framing BODY with BORDER drawn in
 FACE.  Optional TITLE renders inline on the top border."
-  (%boxed-node child border face title #f))
+  (%boxed-node body border face title #f))
 
 (define-record-type <pad-node>
-  (%pad-node child top right bottom left face cache)
+  (%pad-node body top right bottom left face cache)
   pad-node?
-  (child pad-node-child)
+  (body pad-node-body)
   (top pad-node-top)
   (right pad-node-right)
   (bottom pad-node-bottom)
@@ -292,70 +292,70 @@ FACE.  Optional TITLE renders inline on the top border."
   (face pad-node-face)
   (cache pad-node-cache set-pad-node-cache!))
 
-(define (make-pad-node child top right bottom left face)
-  "Return a fresh <pad-node> wrapping CHILD with the given padding
+(define (make-pad-node body top right bottom left face)
+  "Return a fresh <pad-node> wrapping BODY with the given padding
 cells on each side, optionally coloured by FACE."
-  (%pad-node child top right bottom left face #f))
+  (%pad-node body top right bottom left face #f))
 
 (define-record-type <margin-node>
-  (%margin-node child top right bottom left cache)
+  (%margin-node body top right bottom left cache)
   margin-node?
-  (child  margin-node-child)
+  (body  margin-node-body)
   (top    margin-node-top)
   (right  margin-node-right)
   (bottom margin-node-bottom)
   (left   margin-node-left)
   (cache  margin-node-cache set-margin-node-cache!))
 
-(define (make-margin-node child top right bottom left)
-  "Return a fresh <margin-node> wrapping CHILD with transparent
+(define (make-margin-node body top right bottom left)
+  "Return a fresh <margin-node> wrapping BODY with transparent
 margin cells on each side."
-  (%margin-node child top right bottom left #f))
+  (%margin-node body top right bottom left #f))
 
 (define-record-type <align-node>
-  (%align-node child h v width height cache)
+  (%align-node body h v width height cache)
   align-node?
-  (child  align-node-child)
+  (body  align-node-body)
   (h      align-node-h)
   (v      align-node-v)
   (width  align-node-width)
   (height align-node-height)
   (cache  align-node-cache set-align-node-cache!))
 
-(define (make-align-node child h v width height)
-  "Return a fresh <align-node> positioning CHILD within its rect.
+(define (make-align-node body h v width height)
+  "Return a fresh <align-node> positioning BODY within its rect.
 H is 'left / 'center / 'right; V is 'top / 'middle / 'bottom.
-WIDTH and HEIGHT (or #f for the rect's own) cap the slot the child
-is positioned inside.  When CHILD overflows on an axis, the 'right /
+WIDTH and HEIGHT (or #f for the rect's own) cap the slot the body
+is positioned inside.  When BODY overflows on an axis, the 'right /
 'bottom / 'center / 'middle modes clip from the opposite edge so the
 content's anchored edge stays inside the rect."
-  (%align-node child h v width height #f))
+  (%align-node body h v width height #f))
 
 (define-record-type <width-node>
-  (%width-node child w align cache)
+  (%width-node body w align cache)
   width-node?
-  (child width-node-child)
+  (body width-node-body)
   (w width-node-w)
   (align width-node-align)
   (cache width-node-cache set-width-node-cache!))
 
-(define (make-width-node child w align)
-  "Return a fresh <width-node> constraining CHILD to W cells wide,
+(define (make-width-node body w align)
+  "Return a fresh <width-node> constraining BODY to W cells wide,
 aligning per ALIGN ('left / 'center / 'right) when narrower."
-  (%width-node child w align #f))
+  (%width-node body w align #f))
 
 (define-record-type <height-node>
-  (%height-node child h valign cache)
+  (%height-node body h valign cache)
   height-node?
-  (child height-node-child)
+  (body height-node-body)
   (h height-node-h)
   (valign height-node-valign)
   (cache height-node-cache set-height-node-cache!))
 
-(define (make-height-node child h valign)
-  "Return a fresh <height-node> constraining CHILD to H cells tall,
+(define (make-height-node body h valign)
+  "Return a fresh <height-node> constraining BODY to H cells tall,
 aligning per VALIGN ('top / 'middle / 'bottom) when shorter."
-  (%height-node child h valign #f))
+  (%height-node body h valign #f))
 
 (define-record-type <cursor-node>
   (make-cursor-node col row style)
@@ -377,25 +377,25 @@ list of <placement>s) layered on top in order."
   (%overlay-node base overlays #f))
 
 (define-record-type <placement>
-  (make-placement col row child)
+  (make-placement col row body)
   placement?
   (col   placement-col)
   (row   placement-row)
-  (child placement-child))
+  (body placement-body))
 
 (define-record-type <static-node>
-  (%static-node child cached-rect cached-cmds size-cache)
+  (%static-node body cached-rect cached-cmds size-cache)
   static-node?
-  (child static-node-child)
+  (body static-node-body)
   (cached-rect static-node-cached-rect set-static-node-cached-rect!)
   (cached-cmds static-node-cached-cmds set-static-node-cached-cmds!)
   (size-cache static-node-size-cache set-static-node-size-cache!))
 
-(define (make-static-node child)
-  "Return a fresh <static-node> wrapping CHILD.  The engine skips
+(define (make-static-node body)
+  "Return a fresh <static-node> wrapping BODY.  The engine skips
 update dispatch on static nodes and caches the rendered cmds across
 frames as long as the assigned rect is unchanged."
-  (%static-node child #f #f #f))
+  (%static-node body #f #f #f))
 
 (define-record-type <image-node>
   (make-image-node src w h px py src-x src-y src-w src-h fallback)
@@ -412,35 +412,35 @@ frames as long as the assigned rect is unchanged."
   (fallback image-node-fallback))
 
 (define-record-type <click-node>
-  (%click-node action right-action child cache)
+  (%click-node action right-action body cache)
   click-node?
   (action       click-node-action)
   (right-action click-node-right-action)
-  (child        click-node-child)
+  (body        click-node-body)
   (cache        click-node-cache set-click-node-cache!))
 
-(define* (make-click-node action child #:optional (right-action #f))
-  "Return a fresh <click-node> wrapping CHILD.  ACTION is dispatched
+(define* (make-click-node action body #:optional (right-action #f))
+  "Return a fresh <click-node> wrapping BODY.  ACTION is dispatched
 when the rendered rect receives a left-button press; the optional
 RIGHT-ACTION handles right-button presses."
-  (%click-node action right-action child #f))
+  (%click-node action right-action body #f))
 
 (define-record-type <hover-node>
-  (%hover-node child styler cache)
+  (%hover-node body styler cache)
   hover-node?
-  (child   hover-node-child)
+  (body   hover-node-body)
   (styler  hover-node-styler)
   (cache   hover-node-cache set-hover-node-cache!))
 
-(define (make-hover-node child styler)
-  "STYLER is a unary procedure (lambda (child) → view-node) that
+(define (make-hover-node body styler)
+  "STYLER is a unary procedure (lambda (body) → view-node) that
 returns the view to render whenever the cursor is inside the node's
-assigned rect. Any view transformation works — restyle the child,
+assigned rect. Any view transformation works — restyle the body,
 swap glyphs, wrap with overlay, return a static replacement node."
   (unless (procedure? styler)
-    (error "make-hover-node: STYLER must be a procedure (lambda (child) → view-node)"
+    (error "make-hover-node: STYLER must be a procedure (lambda (body) → view-node)"
            styler))
-  (%hover-node child styler #f))
+  (%hover-node body styler #f))
 
 (define-record-type <flex-node>
   (%flex-node body grow shrink cache)
@@ -508,7 +508,7 @@ stale."
 
 (define (view-node? x)
   "Return #t if X is any kind of view-tree node: a known leaf or
-container record, a GOOPS instance (user-defined widgets), a string
+container record, a widget (user-defined widgets), a string
 (treated as a text leaf), or #f (empty)."
   (or (text-node? x) (text-runs-node? x)
       (fill-node? x) (spacer-node? x)
@@ -534,7 +534,7 @@ zero-width and wide characters."
 (define (compute-size node)
   "Compute NODE's intrinsic (width . height) in cells.  Memoised in
 each node's cache slot.  Recursive: container sizes are derived from
-their children's sizes.  Strings, #f, and GOOPS instances without a
+their items's sizes.  Strings, #f, and widgets without a
 known size return zero or a string-width fallback."
   (cond
    ((not node) (cons 0 0))
@@ -558,59 +558,59 @@ known size return zero or a string-width fallback."
    ((cursor-node? node) (cons 0 0))
    ((vbox-node? node)
     (memo vbox-node-cache set-vbox-node-cache! node
-          (let loop ((cs (vbox-node-children node)) (mw 0) (sh 0))
+          (let loop ((cs (vbox-node-items node)) (mw 0) (sh 0))
             (if (null? cs)
                 (cons mw sh)
                 (let ((s (view-size (car cs))))
                   (loop (cdr cs) (max mw (car s)) (+ sh (cdr s))))))))
    ((hbox-node? node)
     (memo hbox-node-cache set-hbox-node-cache! node
-          (let loop ((cs (hbox-node-children node)) (sw 0) (mh 0))
+          (let loop ((cs (hbox-node-items node)) (sw 0) (mh 0))
             (if (null? cs)
                 (cons sw mh)
                 (let ((s (view-size (car cs))))
                   (loop (cdr cs) (+ sw (car s)) (max mh (cdr s))))))))
    ((boxed-node? node)
     (memo boxed-node-cache set-boxed-node-cache! node
-          (let ((s (view-size (boxed-node-child node))))
+          (let ((s (view-size (boxed-node-body node))))
             (cons (+ (car s) 2) (+ (cdr s) 2)))))
    ((pad-node? node)
     (memo pad-node-cache set-pad-node-cache! node
-          (let ((s (view-size (pad-node-child node))))
+          (let ((s (view-size (pad-node-body node))))
             (cons (+ (car s) (pad-node-left node) (pad-node-right node))
                   (+ (cdr s) (pad-node-top node) (pad-node-bottom node))))))
    ((margin-node? node)
     (memo margin-node-cache set-margin-node-cache! node
-          (let ((s (view-size (margin-node-child node))))
+          (let ((s (view-size (margin-node-body node))))
             (cons (+ (car s) (margin-node-left node) (margin-node-right node))
                   (+ (cdr s) (margin-node-top  node) (margin-node-bottom node))))))
    ((align-node? node)
     (memo align-node-cache set-align-node-cache! node
-          (let ((s (view-size (align-node-child node))))
+          (let ((s (view-size (align-node-body node))))
             (cons (or (align-node-width  node) (car s))
                   (or (align-node-height node) (cdr s))))))
    ((width-node? node)
     (memo width-node-cache set-width-node-cache! node
-          (let ((s (view-size (width-node-child node))))
+          (let ((s (view-size (width-node-body node))))
             (cons (width-node-w node) (cdr s)))))
    ((height-node? node)
     (memo height-node-cache set-height-node-cache! node
-          (let ((s (view-size (height-node-child node))))
+          (let ((s (view-size (height-node-body node))))
             (cons (car s) (height-node-h node)))))
    ((overlay-node? node)
     (memo overlay-node-cache set-overlay-node-cache! node
           (view-size (overlay-node-base node))))
    ((static-node? node)
     (memo static-node-size-cache set-static-node-size-cache! node
-          (view-size (static-node-child node))))
+          (view-size (static-node-body node))))
    ((image-node? node)
     (cons (image-node-w node) (image-node-h node)))
    ((click-node? node)
     (memo click-node-cache set-click-node-cache! node
-          (view-size (click-node-child node))))
+          (view-size (click-node-body node))))
    ((hover-node? node)
     (memo hover-node-cache set-hover-node-cache! node
-          (view-size (hover-node-child node))))
+          (view-size (hover-node-body node))))
    ((flex-node? node)
     (memo flex-node-cache set-flex-node-cache! node
           (view-size (flex-node-body node))))
@@ -626,7 +626,7 @@ known size return zero or a string-width fallback."
 (define (invalidate-size! node)
   "Drop NODE's cached intrinsic size so the next view-size call
 recomputes it.  Use after mutating NODE's structure (e.g. adding a
-vbox child).  Static nodes also lose their cached cmds and rect."
+vbox body).  Static nodes also lose their cached cmds and rect."
   (cond
    ((text-node? node)    (set-text-node-cache!    node #f))
    ((fill-node? node)    (set-fill-node-cache!    node #f))

@@ -6,7 +6,6 @@
   #:export (<spinner>
             spinner?
             make-spinner
-            spinner-stop!
             spinner-frame-idx
             spinner-face
             spinner-hz
@@ -50,12 +49,12 @@ drawn in the spinner's face."
          #:fg (spinner-face s))))
 
 (define-method (update (s <spinner>) msg)
-  "React to MSG for <spinner> S.  On <init>, install a periodic
-ticker tagged with S so `spinner-stop!` can later cancel it.  On
+  "React to MSG for <spinner> S.  On <mount>, install a periodic
+ticker tagged with S; the engine auto-cancels it on <unmount>.  On
 each <tick>, advance the frame index.  Returns two values: the
 updated spinner and an optional cmd."
   (cond
-   ((init? msg)
+   ((mount? msg)
     (values s (every #:hz (spinner-hz s)
                      #:id  (list 'spinner-tick s)
                      (lambda () (tick)))))
@@ -63,8 +62,3 @@ updated spinner and an optional cmd."
     (set! (spinner-frame-idx s) (+ 1 (spinner-frame-idx s)))
     (values s #f))
    (else (values s #f))))
-
-(define (spinner-stop! s)
-  "Cancel a spinner's installed ticker. Use when removing a spinner
-from the tree to free its fiber."
-  (cancel (list 'spinner-tick s)))

@@ -81,20 +81,20 @@ Styling kwargs: #:fg #:bg (hex or palette symbol),
               spans)))))))
 
 (define (vbox . args)
-  "Build a vertical box stacking its children top to bottom.  ARGS
-is a mix of child nodes and the styling kwargs accepted by `txt`.
-#f children are filtered out so callers can pass conditional slots."
+  "Build a vertical box stacking its items top to bottom.  ARGS
+is a mix of body nodes and the styling kwargs accepted by `txt`.
+#f items are filtered out so callers can pass conditional slots."
   (call-with-values (lambda () (parse-style-args args))
-    (lambda (children face _attrs)
-      (make-vbox-node (filter (lambda (x) x) children) face))))
+    (lambda (items face _attrs)
+      (make-vbox-node (filter (lambda (x) x) items) face))))
 
 (define (hbox . args)
-  "Build a horizontal box laying its children left to right.  ARGS
-is a mix of child nodes and the styling kwargs accepted by `txt`.
-#f children are filtered out so callers can pass conditional slots."
+  "Build a horizontal box laying its items left to right.  ARGS
+is a mix of body nodes and the styling kwargs accepted by `txt`.
+#f items are filtered out so callers can pass conditional slots."
   (call-with-values (lambda () (parse-style-args args))
-    (lambda (children face _attrs)
-      (make-hbox-node (filter (lambda (x) x) children) face))))
+    (lambda (items face _attrs)
+      (make-hbox-node (filter (lambda (x) x) items) face))))
 
 (define %zero-spacer (make-spacer-node 0 0))
 
@@ -108,19 +108,19 @@ N cells along the box's major axis.  Otherwise sized explicitly by
    ((eqv? n 0) %zero-spacer)
    (else (make-spacer-node w n))))
 
-(define (static child)
-  "Wrap CHILD so the engine skips its update generic.  Use for nodes
+(define (static body)
+  "Wrap BODY so the engine skips its update generic.  Use for nodes
 that never react to messages — saves a generic dispatch per tick."
-  (make-static-node child))
+  (make-static-node body))
 
 (define (join . elements)
   "Stack ELEMENTS vertically.  Convenience alias for vbox without
 styling kwargs."
   (apply vbox elements))
 
-(define* (pad child #:key (top 0) (right 0) (bottom 0) (left 0) (all 0)
+(define* (pad body #:key (top 0) (right 0) (bottom 0) (left 0) (all 0)
               (fg #f) (bg #f))
-  "Wrap CHILD with padding cells inside its border.  Specify per-side
+  "Wrap BODY with padding cells inside its border.  Specify per-side
 amounts (#:top / #:right / #:bottom / #:left) or #:all for uniform
 padding.  #:fg / #:bg apply a face to the padding cells."
   (let ((t (if (positive? all) all top))
@@ -128,27 +128,27 @@ padding.  #:fg / #:bg apply a face to the padding cells."
         (b (if (positive? all) all bottom))
         (l (if (positive? all) all left))
         (f (if (or fg bg) (face #:fg fg #:bg bg #:attrs '()) #f)))
-    (make-pad-node child t r b l f)))
+    (make-pad-node body t r b l f)))
 
-(define* (margin child #:key (top 0) (right 0) (bottom 0) (left 0) (all 0))
-  "Wrap CHILD with empty margin cells outside its border.  Like pad
+(define* (margin body #:key (top 0) (right 0) (bottom 0) (left 0) (all 0))
+  "Wrap BODY with empty margin cells outside its border.  Like pad
 but the margin cells are transparent (no face), so the parent
 background shows through."
   (let ((t (if (positive? all) all top))
         (r (if (positive? all) all right))
         (b (if (positive? all) all bottom))
         (l (if (positive? all) all left)))
-    (make-margin-node child t r b l)))
+    (make-margin-node body t r b l)))
 
-(define* (align child #:optional (h-or-v #f) (v-mode #f)
+(define* (align body #:optional (h-or-v #f) (v-mode #f)
                 #:key (h #f) (v #f) (width #f) (height #f))
-  "Position CHILD inside the rect.
+  "Position BODY inside the rect.
 
 Horizontal mode: 'left (default), 'center, 'right.
 Vertical mode:   'top  (default), 'middle, 'bottom.
 
-Either as kwargs — `(align child #:h 'center #:v 'middle)` — or
-positionally — `(align child 'center)` for horizontal, `(align child
+Either as kwargs — `(align body #:h 'center #:v 'middle)` — or
+positionally — `(align body 'center)` for horizontal, `(align body
 'center 'middle)` for both.  A mode passed positionally is classed
 as horizontal if it's 'left/'center/'right, vertical if it's
 'top/'middle/'bottom.
@@ -156,7 +156,7 @@ as horizontal if it's 'left/'center/'right, vertical if it's
 #:width / #:height pin the alignment slot explicitly; otherwise the
 slot inherits the parent rect's full dimension on that axis.
 
-Overflow rule: when CHILD's intrinsic size exceeds the alignment
+Overflow rule: when BODY's intrinsic size exceeds the alignment
 slot on an axis, the anchored edge stays inside the slot and the
 opposite edge clips.  E.g. `#:v 'bottom` with overflowing content
 clips from the top — natural for chat-style tail anchoring."
@@ -176,19 +176,19 @@ clips from the top — natural for chat-style tail anchoring."
                      (and c1 (eq? (car c1) 'v) (cdr c1))
                      (and c2 (eq? (car c2) 'v) (cdr c2))
                      'top)))
-    (make-align-node child h-mode v-mode width height)))
+    (make-align-node body h-mode v-mode width height)))
 
-(define* (width child w #:key (align 'left))
-  "Constrain CHILD to W cells wide.  #:align controls placement
-within the slot when CHILD is narrower than W ('left, 'center,
+(define* (width body w #:key (align 'left))
+  "Constrain BODY to W cells wide.  #:align controls placement
+within the slot when BODY is narrower than W ('left, 'center,
 'right)."
-  (make-width-node child w align))
+  (make-width-node body w align))
 
-(define* (height child h #:key (valign 'top))
-  "Constrain CHILD to H cells tall.  #:valign controls placement
-within the slot when CHILD is shorter than H ('top, 'middle,
+(define* (height body h #:key (valign 'top))
+  "Constrain BODY to H cells tall.  #:valign controls placement
+within the slot when BODY is shorter than H ('top, 'middle,
 'bottom)."
-  (make-height-node child h valign))
+  (make-height-node body h valign))
 
 (define* (fill w h #:key (fg #f) (bg #f))
   "Build a solid-color block W cells wide by H cells tall.  Default
@@ -204,10 +204,10 @@ cursor shape: 'block, 'underline, or 'bar.  Only the last cursor
 node in render order takes effect."
   (make-cursor-node col row style))
 
-(define (pin col row child)
-  "Position CHILD at absolute (COL, ROW) within an overlay.  Use
+(define (pin col row body)
+  "Position BODY at absolute (COL, ROW) within an overlay.  Use
 inside `overlay` to layer floating elements over a base view."
-  (make-placement col row child))
+  (make-placement col row body))
 
 (define (overlay base . pins)
   "Render BASE with each PIN (a `pin` node) drawn on top in order.
@@ -225,31 +225,31 @@ terminal lacks graphics support (defaults to a blank spacer)."
   (make-image-node src w h px py src-x src-y src-w src-h
                    (or fallback (make-spacer-node w h))))
 
-(define* (on-click action-or-child #:optional (child-or-unset #f)
+(define* (on-click action-or-body #:optional (body-or-unset #f)
                    #:key (left #f) (right #f))
-  "Wrap CHILD so mouse presses inside its rendered rect dispatch as
+  "Wrap BODY so mouse presses inside its rendered rect dispatch as
 msgs through update.
 
-Positional (one action): (on-click ACTION CHILD) — left-press
+Positional (one action): (on-click ACTION BODY) — left-press
 dispatches ACTION.
 
-Kwarg (left / right):    (on-click CHILD #:left LA #:right RA) —
+Kwarg (left / right):    (on-click BODY #:left LA #:right RA) —
 left-press dispatches LA; right-press dispatches RA. Either may be #f.
 
 Each action is any value the app's update knows how to match
 (symbol, list, key)."
   (cond
-   (child-or-unset
-    (make-click-node action-or-child child-or-unset right))
+   (body-or-unset
+    (make-click-node action-or-body body-or-unset right))
    (else
-    (make-click-node left action-or-child right))))
+    (make-click-node left action-or-body right))))
 
-(define (on-hover child styler)
-  "Wrap CHILD so the engine renders STYLER's output instead while the
-mouse cursor is inside the child's rect. STYLER is a unary procedure
-(lambda (child) → view-node) — return whatever view should replace the
-child on hover. For a static substitute, use (lambda (_) replacement)."
-  (make-hover-node child styler))
+(define (on-hover body styler)
+  "Wrap BODY so the engine renders STYLER's output instead while the
+mouse cursor is inside the body's rect. STYLER is a unary procedure
+(lambda (body) → view-node) — return whatever view should replace the
+body on hover. For a static substitute, use (lambda (_) replacement)."
+  (make-hover-node body styler))
 
 (define* (flex body #:key (grow 1) (shrink 0))
   "Tag BODY as flexible inside a vbox or hbox. After the box sums its

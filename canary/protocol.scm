@@ -2,7 +2,7 @@
   #:use-module (oop goops)
   #:use-module (ice-9 match)
   #:use-module (canary key)
-  #:re-export (<key> key key? key-sym key-mods)
+  #:re-export (<key> key key? key-sym key-mods key-event)
   #:export (;; Events.
             <size>    size     size?
             size-width size-height
@@ -19,6 +19,12 @@
             <focus>   focused  focused?
             <blur>    blurred  blurred?
             <resume>  resumed  resumed?
+
+            <paste>   paste    paste?
+            paste-text
+
+            <mount>   mount    mount?
+            <unmount> unmount  unmount?
 
             <init>    init     init?
 
@@ -51,7 +57,7 @@
 ;;; cross the boundary:
 ;;;
 ;;;   * Events  — input flowing from the world into the app's react
-;;;               procedure.  GOOPS classes; pattern-matched with
+;;;               procedure.  widgets; pattern-matched with
 ;;;               `is-a?` predicates.
 ;;;
 ;;;   * Cmds    — declarative requests returned by react, interpreted
@@ -153,6 +159,51 @@
 (define (resumed)
   "Return a fresh <resume> event."
   (make <resume>))
+
+
+;; Bracketed paste payload, delivered as one event with the raw pasted
+;; bytes intact (newlines, control chars, anything).  The engine
+;; cascades it like other broadcast events; widgets that care (text
+;; inputs, editors) match on <paste> and consume `paste-text`.
+
+(define-class <paste> ()
+  (text #:init-keyword #:text #:accessor paste-text))
+
+(define (paste? x)
+  "Return #t if X is a <paste> event."
+  (is-a? x <paste>))
+
+(define (paste text)
+  "Return a fresh <paste> event carrying the raw pasted string TEXT."
+  (make <paste> #:text text))
+
+
+;; <mount> / <unmount> — lifecycle events the engine dispatches when a
+;; widget first appears in the view tree or disappears from it.  Used
+;; by widgets to install subscriptions tied to their visible lifetime;
+;; subs installed during <mount> are auto-cancelled by the engine on
+;; <unmount>.
+
+(define-class <mount> ())
+
+(define (mount? x)
+  "Return #t if X is a <mount> event."
+  (is-a? x <mount>))
+
+(define (mount)
+  "Return a fresh <mount> event."
+  (make <mount>))
+
+
+(define-class <unmount> ())
+
+(define (unmount? x)
+  "Return #t if X is an <unmount> event."
+  (is-a? x <unmount>))
+
+(define (unmount)
+  "Return a fresh <unmount> event."
+  (make <unmount>))
 
 
 ;; <init> — sent once by the engine before the first user input.

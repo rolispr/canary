@@ -9,7 +9,7 @@
 
 (test-begin "hover")
 
-;; The hover-node renders its child normally; when the cursor (threaded
+;; The hover-node renders its body normally; when the cursor (threaded
 ;; through *mouse-x* / *mouse-y* parameters by render) is inside the
 ;; node's assigned rect, it renders the styler's output instead.
 
@@ -21,16 +21,16 @@
   (let ((tc (find text-cmd? cmds)))
     (and tc (text-str tc))))
 
-;; Cursor far away → child shown
-(test-equal "cursor outside → child renders"
+;; Cursor far away → body shown
+(test-equal "cursor outside → body renders"
   "off" (text-of (render hov 10 1 #:mouse-x 100 #:mouse-y 100)))
 
 ;; Cursor on the node → styler output renders
 (test-equal "cursor inside → styler output renders"
   "on"  (text-of (render hov 10 1 #:mouse-x 1 #:mouse-y 0)))
 
-;; Cursor at default (-1, -1) → child
-(test-equal "no cursor → child renders"
+;; Cursor at default (-1, -1) → body
+(test-equal "no cursor → body renders"
   "off" (text-of (render hov 10 1)))
 
 ;; Nested hover composes: cursor inside both outer and inner rects

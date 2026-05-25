@@ -33,7 +33,7 @@
 
 ;; ── flex distribution ────────────────────────────────────────────────
 
-;; Two flex children, equal grow → 50/50 of leftover.
+;; Two flex items, equal grow → 50/50 of leftover.
 ;; Box height 10, intrinsics 1+1=2, leftover 8, each gets +4 → rows 0,5.
 (let ((cmds (render (vbox (flex (txt "a")) (flex (txt "b"))) 10 10)))
   (test-equal "equal grow splits leftover evenly: first at row 0"
@@ -69,7 +69,7 @@
   (test-equal "hbox 2:1 grow: first at col 0" 0 (text-col (car cmds)))
   (test-equal "hbox 2:1 grow: second at col 7" 7 (text-col (cadr cmds))))
 
-;; No flex children → leftover stays blank, items keep intrinsic.
+;; No flex items → leftover stays blank, items keep intrinsic.
 (let ((cmds (render (vbox (txt "a") (txt "b")) 80 10)))
   (test-equal "no flex: first at row 0" 0 (text-row (car cmds)))
   (test-equal "no flex: second at row 1" 1 (text-row (cadr cmds)))
