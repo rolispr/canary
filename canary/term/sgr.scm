@@ -3,6 +3,12 @@
   #:export (process-sgr!))
 
 (define (process-sgr! term params)
+  "Apply an SGR (Select Graphic Rendition) sequence with numeric
+PARAMS to TERM's attribute slot.  Handles the standard codes 0-9 +
+21-29 (reset / weight / underline / blink / inverse / conceal /
+strike), 30-37/40-47/90-97/100-107 (16-colour fg/bg), 38/48/58
+followed by 5;N or 2;R;G;B (extended colour for fg/bg/underline),
+and 39/49/59 (default colour).  Empty params reset all attrs."
   (let* ((attrs (term-attrs term))
          (vec (list->vector params))
          (len (vector-length vec))
@@ -77,6 +83,10 @@
           (loop)))))))
 
 (define (consume-extended-color! attrs slot next)
+  "Read an extended-colour spec from the SGR param iterator NEXT
+(a thunk returning the next param) and apply it to SLOT ('fg, 'bg,
+or 'ul) of ATTRS.  MODE 5 reads a 0-255 palette index; MODE 2 reads
+three 0-255 RGB params.  Drops invalid specs silently."
   (let ((mode (next)))
     (cond
      ((eq? mode 5)

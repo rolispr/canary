@@ -81,11 +81,17 @@ Styling kwargs: #:fg #:bg (hex or palette symbol),
               spans)))))))
 
 (define (vbox . args)
+  "Build a vertical box stacking its children top to bottom.  ARGS
+is a mix of child nodes and the styling kwargs accepted by `txt`.
+#f children are filtered out so callers can pass conditional slots."
   (call-with-values (lambda () (parse-style-args args))
     (lambda (children face _attrs)
       (make-vbox-node (filter (lambda (x) x) children) face))))
 
 (define (hbox . args)
+  "Build a horizontal box laying its children left to right.  ARGS
+is a mix of child nodes and the styling kwargs accepted by `txt`.
+#f children are filtered out so callers can pass conditional slots."
   (call-with-values (lambda () (parse-style-args args))
     (lambda (children face _attrs)
       (make-hbox-node (filter (lambda (x) x) children) face))))
@@ -93,19 +99,30 @@ Styling kwargs: #:fg #:bg (hex or palette symbol),
 (define %zero-spacer (make-spacer-node 0 0))
 
 (define* (spacer #:optional (n #f) #:key (w 0) (h 0))
+  "Build an empty space node.  With one positional arg N, expands to
+N cells along the box's major axis.  Otherwise sized explicitly by
+#:w / #:h.  A zero-sized spacer is shared (no allocation)."
   (cond
    ((and (not n) (zero? w) (zero? h)) %zero-spacer)
    ((not n) (make-spacer-node w h))
    ((eqv? n 0) %zero-spacer)
    (else (make-spacer-node w n))))
 
-(define (static child) (make-static-node child))
+(define (static child)
+  "Wrap CHILD so the engine skips its update generic.  Use for nodes
+that never react to messages — saves a generic dispatch per tick."
+  (make-static-node child))
 
 (define (join . elements)
+  "Stack ELEMENTS vertically.  Convenience alias for vbox without
+styling kwargs."
   (apply vbox elements))
 
 (define* (pad child #:key (top 0) (right 0) (bottom 0) (left 0) (all 0)
               (fg #f) (bg #f))
+  "Wrap CHILD with padding cells inside its border.  Specify per-side
+amounts (#:top / #:right / #:bottom / #:left) or #:all for uniform
+padding.  #:fg / #:bg apply a face to the padding cells."
   (let ((t (if (positive? all) all top))
         (r (if (positive? all) all right))
         (b (if (positive? all) all bottom))
@@ -114,39 +131,97 @@ Styling kwargs: #:fg #:bg (hex or palette symbol),
     (make-pad-node child t r b l f)))
 
 (define* (margin child #:key (top 0) (right 0) (bottom 0) (left 0) (all 0))
+  "Wrap CHILD with empty margin cells outside its border.  Like pad
+but the margin cells are transparent (no face), so the parent
+background shows through."
   (let ((t (if (positive? all) all top))
         (r (if (positive? all) all right))
         (b (if (positive? all) all bottom))
         (l (if (positive? all) all left)))
     (make-margin-node child t r b l)))
 
-(define* (align child mode #:key (width #f))
-  (make-align-node child mode width))
+(define* (align child #:optional (h-or-v #f) (v-mode #f)
+                #:key (h #f) (v #f) (width #f) (height #f))
+  "Position CHILD inside the rect.
+
+Horizontal mode: 'left (default), 'center, 'right.
+Vertical mode:   'top  (default), 'middle, 'bottom.
+
+Either as kwargs — `(align child #:h 'center #:v 'middle)` — or
+positionally — `(align child 'center)` for horizontal, `(align child
+'center 'middle)` for both.  A mode passed positionally is classed
+as horizontal if it's 'left/'center/'right, vertical if it's
+'top/'middle/'bottom.
+
+#:width / #:height pin the alignment slot explicitly; otherwise the
+slot inherits the parent rect's full dimension on that axis.
+
+Overflow rule: when CHILD's intrinsic size exceeds the alignment
+slot on an axis, the anchored edge stays inside the slot and the
+opposite edge clips.  E.g. `#:v 'bottom` with overflowing content
+clips from the top — natural for chat-style tail anchoring."
+  (define (classify m)
+    (case m
+      ((left center right) (cons 'h m))
+      ((top middle bottom) (cons 'v m))
+      ((#f) #f)
+      (else (error "align: unknown mode" m))))
+  (let* ((c1 (classify h-or-v))
+         (c2 (classify v-mode))
+         (h-mode (or h
+                     (and c1 (eq? (car c1) 'h) (cdr c1))
+                     (and c2 (eq? (car c2) 'h) (cdr c2))
+                     'left))
+         (v-mode (or v
+                     (and c1 (eq? (car c1) 'v) (cdr c1))
+                     (and c2 (eq? (car c2) 'v) (cdr c2))
+                     'top)))
+    (make-align-node child h-mode v-mode width height)))
 
 (define* (width child w #:key (align 'left))
+  "Constrain CHILD to W cells wide.  #:align controls placement
+within the slot when CHILD is narrower than W ('left, 'center,
+'right)."
   (make-width-node child w align))
 
 (define* (height child h #:key (valign 'top))
+  "Constrain CHILD to H cells tall.  #:valign controls placement
+within the slot when CHILD is shorter than H ('top, 'middle,
+'bottom)."
   (make-height-node child h valign))
 
 (define* (fill w h #:key (fg #f) (bg #f))
+  "Build a solid-color block W cells wide by H cells tall.  Default
+face is 'default; supply #:fg / #:bg to colour it."
   (let ((f (cond
             ((or fg bg) (face #:fg fg #:bg bg #:attrs '()))
             (else 'default))))
     (make-fill-node w h f)))
 
 (define* (place-cursor col row #:key (style 'block))
+  "Emit a cursor-placement node at (COL, ROW).  #:style is the
+cursor shape: 'block, 'underline, or 'bar.  Only the last cursor
+node in render order takes effect."
   (make-cursor-node col row style))
 
 (define (pin col row child)
+  "Position CHILD at absolute (COL, ROW) within an overlay.  Use
+inside `overlay` to layer floating elements over a base view."
   (make-placement col row child))
 
 (define (overlay base . pins)
+  "Render BASE with each PIN (a `pin` node) drawn on top in order.
+Pins are clipped to BASE's rect."
   (make-overlay-node base pins))
 
 (define* (image src #:key (w 1) (h 1) (px 0) (py 0)
                 (src-x 0) (src-y 0) (src-w 0) (src-h 0)
                 (fallback #f))
+  "Build an image-placement node referencing registered image SRC.
+#:w / #:h size the cell footprint; #:px / #:py shift the image
+within its cell in pixels; #:src-x / #:src-y / #:src-w / #:src-h
+crop the source image; #:fallback is the view to render when the
+terminal lacks graphics support (defaults to a blank spacer)."
   (make-image-node src w h px py src-x src-y src-w src-h
                    (or fallback (make-spacer-node w h))))
 
@@ -165,10 +240,8 @@ Each action is any value the app's update knows how to match
 (symbol, list, key)."
   (cond
    (child-or-unset
-    ;; positional form: action-or-child is the action, child-or-unset is the child.
     (make-click-node action-or-child child-or-unset right))
    (else
-    ;; kwarg form: action-or-child is the child.
     (make-click-node left action-or-child right))))
 
 (define (on-hover child styler)

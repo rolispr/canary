@@ -86,8 +86,10 @@
             align-node?
             make-align-node
             align-node-child
-            align-node-mode
+            align-node-h
+            align-node-v
             align-node-width
+            align-node-height
 
             <width-node>
             width-node?
@@ -182,9 +184,11 @@
   (h rect-h))
 
 (define (rect-empty? r)
+  "Return #t if R has zero or negative width or height."
   (or (<= (rect-w r) 0) (<= (rect-h r) 0)))
 
 (define (rect=? a b)
+  "Return #t if rectangles A and B have identical origin and size."
   (and (= (rect-col a) (rect-col b))
        (= (rect-row a) (rect-row b))
        (= (rect-w   a) (rect-w   b))
@@ -198,14 +202,21 @@
   (attrs text-node-attrs)
   (cache text-node-cache set-text-node-cache!))
 
-(define (make-text-node str face attrs) (%text-node str face attrs #f))
+(define (make-text-node str face attrs)
+  "Return a fresh <text-node> holding string STR rendered under FACE
+with extra ATTRS (a list of attribute symbols).  The size cache
+starts empty."
+  (%text-node str face attrs #f))
 
 (define-record-type <text-runs-node>
   (%text-runs-node runs cache) text-runs-node?
   (runs  text-runs-node-runs)
   (cache text-runs-node-cache set-text-runs-node-cache!))
 
-(define (make-text-runs-node runs) (%text-runs-node runs #f))
+(define (make-text-runs-node runs)
+  "Return a fresh <text-runs-node> sequencing RUNS (a list of
+<text-node>s or strings) inline on a single line."
+  (%text-runs-node runs #f))
 
 (define-record-type <fill-node>
   (%fill-node w h face cache)
@@ -215,7 +226,10 @@
   (face fill-node-face)
   (cache fill-node-cache set-fill-node-cache!))
 
-(define (make-fill-node w h face) (%fill-node w h face #f))
+(define (make-fill-node w h face)
+  "Return a fresh <fill-node> of W cells by H cells painted with
+FACE."
+  (%fill-node w h face #f))
 
 (define-record-type <spacer-node>
   (%spacer-node w h cache)
@@ -224,7 +238,10 @@
   (h spacer-node-h)
   (cache spacer-node-cache set-spacer-node-cache!))
 
-(define (make-spacer-node w h) (%spacer-node w h #f))
+(define (make-spacer-node w h)
+  "Return a fresh <spacer-node> reserving W cells by H cells of
+empty space."
+  (%spacer-node w h #f))
 
 (define-record-type <vbox-node>
   (%vbox-node children face cache)
@@ -233,7 +250,10 @@
   (face vbox-node-face)
   (cache vbox-node-cache set-vbox-node-cache!))
 
-(define (make-vbox-node children face) (%vbox-node children face #f))
+(define (make-vbox-node children face)
+  "Return a fresh <vbox-node> stacking CHILDREN top to bottom, with
+optional FACE applied to the box's background."
+  (%vbox-node children face #f))
 
 (define-record-type <hbox-node>
   (%hbox-node children face cache)
@@ -242,7 +262,10 @@
   (face hbox-node-face)
   (cache hbox-node-cache set-hbox-node-cache!))
 
-(define (make-hbox-node children face) (%hbox-node children face #f))
+(define (make-hbox-node children face)
+  "Return a fresh <hbox-node> laying CHILDREN left to right, with
+optional FACE applied to the box's background."
+  (%hbox-node children face #f))
 
 (define-record-type <boxed-node>
   (%boxed-node child border face title cache)
@@ -254,6 +277,8 @@
   (cache boxed-node-cache set-boxed-node-cache!))
 
 (define* (make-boxed-node child border face #:optional (title #f))
+  "Return a fresh <boxed-node> framing CHILD with BORDER drawn in
+FACE.  Optional TITLE renders inline on the top border."
   (%boxed-node child border face title #f))
 
 (define-record-type <pad-node>
@@ -268,6 +293,8 @@
   (cache pad-node-cache set-pad-node-cache!))
 
 (define (make-pad-node child top right bottom left face)
+  "Return a fresh <pad-node> wrapping CHILD with the given padding
+cells on each side, optionally coloured by FACE."
   (%pad-node child top right bottom left face #f))
 
 (define-record-type <margin-node>
@@ -281,17 +308,28 @@
   (cache  margin-node-cache set-margin-node-cache!))
 
 (define (make-margin-node child top right bottom left)
+  "Return a fresh <margin-node> wrapping CHILD with transparent
+margin cells on each side."
   (%margin-node child top right bottom left #f))
 
 (define-record-type <align-node>
-  (%align-node child mode width cache)
+  (%align-node child h v width height cache)
   align-node?
-  (child align-node-child)
-  (mode align-node-mode)
-  (width align-node-width)
-  (cache align-node-cache set-align-node-cache!))
+  (child  align-node-child)
+  (h      align-node-h)
+  (v      align-node-v)
+  (width  align-node-width)
+  (height align-node-height)
+  (cache  align-node-cache set-align-node-cache!))
 
-(define (make-align-node child mode width) (%align-node child mode width #f))
+(define (make-align-node child h v width height)
+  "Return a fresh <align-node> positioning CHILD within its rect.
+H is 'left / 'center / 'right; V is 'top / 'middle / 'bottom.
+WIDTH and HEIGHT (or #f for the rect's own) cap the slot the child
+is positioned inside.  When CHILD overflows on an axis, the 'right /
+'bottom / 'center / 'middle modes clip from the opposite edge so the
+content's anchored edge stays inside the rect."
+  (%align-node child h v width height #f))
 
 (define-record-type <width-node>
   (%width-node child w align cache)
@@ -301,7 +339,10 @@
   (align width-node-align)
   (cache width-node-cache set-width-node-cache!))
 
-(define (make-width-node child w align) (%width-node child w align #f))
+(define (make-width-node child w align)
+  "Return a fresh <width-node> constraining CHILD to W cells wide,
+aligning per ALIGN ('left / 'center / 'right) when narrower."
+  (%width-node child w align #f))
 
 (define-record-type <height-node>
   (%height-node child h valign cache)
@@ -311,7 +352,10 @@
   (valign height-node-valign)
   (cache height-node-cache set-height-node-cache!))
 
-(define (make-height-node child h valign) (%height-node child h valign #f))
+(define (make-height-node child h valign)
+  "Return a fresh <height-node> constraining CHILD to H cells tall,
+aligning per VALIGN ('top / 'middle / 'bottom) when shorter."
+  (%height-node child h valign #f))
 
 (define-record-type <cursor-node>
   (make-cursor-node col row style)
@@ -327,7 +371,10 @@
   (overlays overlay-node-overlays)
   (cache overlay-node-cache set-overlay-node-cache!))
 
-(define (make-overlay-node base overlays) (%overlay-node base overlays #f))
+(define (make-overlay-node base overlays)
+  "Return a fresh <overlay-node> rendering BASE with OVERLAYS (a
+list of <placement>s) layered on top in order."
+  (%overlay-node base overlays #f))
 
 (define-record-type <placement>
   (make-placement col row child)
@@ -344,7 +391,11 @@
   (cached-cmds static-node-cached-cmds set-static-node-cached-cmds!)
   (size-cache static-node-size-cache set-static-node-size-cache!))
 
-(define (make-static-node child) (%static-node child #f #f #f))
+(define (make-static-node child)
+  "Return a fresh <static-node> wrapping CHILD.  The engine skips
+update dispatch on static nodes and caches the rendered cmds across
+frames as long as the assigned rect is unchanged."
+  (%static-node child #f #f #f))
 
 (define-record-type <image-node>
   (make-image-node src w h px py src-x src-y src-w src-h fallback)
@@ -369,6 +420,9 @@
   (cache        click-node-cache set-click-node-cache!))
 
 (define* (make-click-node action child #:optional (right-action #f))
+  "Return a fresh <click-node> wrapping CHILD.  ACTION is dispatched
+when the rendered rect receives a left-button press; the optional
+RIGHT-ACTION handles right-button presses."
   (%click-node action right-action child #f))
 
 (define-record-type <hover-node>
@@ -388,11 +442,6 @@ swap glyphs, wrap with overlay, return a static replacement node."
            styler))
   (%hover-node child styler #f))
 
-;; A flex node opts its body into a vbox/hbox's leftover-space
-;; distribution. GROW shares any surplus along the box's major axis;
-;; SHRINK shares any deficit. Both default non-negative. Outside a
-;; vbox/hbox the wrapper is transparent: view-size returns the body's
-;; intrinsic size.
 (define-record-type <flex-node>
   (%flex-node body grow shrink cache)
   flex-node?
@@ -402,12 +451,12 @@ swap glyphs, wrap with overlay, return a static replacement node."
   (cache  flex-node-cache set-flex-node-cache!))
 
 (define (make-flex-node body grow shrink)
+  "Return a fresh <flex-node> wrapping BODY with non-negative GROW
+and SHRINK weights.  GROW shares vbox/hbox surplus along the major
+axis; SHRINK shares deficit.  Outside a box, BODY renders at its
+intrinsic size."
   (%flex-node body grow shrink #f))
 
-;; Word-wrapped text. The string is wrapped to the rendered rect's
-;; width at render time; intrinsic size is (1, 1) so the node behaves
-;; as a fill widget — wrap it in (flex …) to claim space. Embeds
-;; newlines as paragraph breaks.
 (define-record-type <wrap-node>
   (%wrap-node str face attrs)
   wrap-node?
@@ -416,34 +465,51 @@ swap glyphs, wrap with overlay, return a static replacement node."
   (attrs wrap-node-attrs))
 
 (define (make-wrap-node str face attrs)
+  "Return a fresh <wrap-node> for word-wrapped string STR styled
+with FACE and ATTRS.  Wrapping happens at render time against the
+assigned rect's width."
   (%wrap-node str face attrs))
 
 (define-generic view)
 (define-generic update)
 
-;; Default so a node that doesn't specialize `update` still participates
-;; in the cascade without a no-applicable-method error.
-(define-method (update node msg sz) (values node #f))
+(define-method (update node msg)
+  "Default update method: pass-through, no state change, no cmd.
+Means nodes that don't specialise `update` still participate in the
+cascade without raising no-applicable-method."
+  (values node #f))
 
 (define %view-cache (make-parameter #f))
 
 (define (with-view-cache cache thunk)
+  "Call THUNK with %view-cache parameterised to CACHE (a hash-table
+keyed by node identity).  Used by the engine to memoise view-tree
+computation across a single render pass."
   (parameterize ((%view-cache cache)) (thunk)))
 
-(define (memoized-view node sz)
+(define (memoized-view node)
+  "Return the rendered view-tree for NODE, consulting and populating
+the current %view-cache when one is in scope.  Without a cache, falls
+back to a plain `view` call."
   (let ((cache (%view-cache)))
     (cond
-     ((not cache) (view node sz))
+     ((not cache) (view node))
      ((hash-ref cache node) => (lambda (tree) tree))
-     (else (let ((tree (view node sz)))
+     (else (let ((tree (view node)))
              (hash-set! cache node tree)
              tree)))))
 
 (define (invalidate-cached-view! node)
+  "Drop NODE's cached view tree from the current %view-cache, if
+any.  Called when NODE's state has changed and its memoised view is
+stale."
   (let ((cache (%view-cache)))
     (when cache (hash-remove! cache node))))
 
 (define (view-node? x)
+  "Return #t if X is any kind of view-tree node: a known leaf or
+container record, a GOOPS instance (user-defined widgets), a string
+(treated as a text leaf), or #f (empty)."
   (or (text-node? x) (text-runs-node? x)
       (fill-node? x) (spacer-node? x)
       (vbox-node? x) (hbox-node? x) (boxed-node? x)
@@ -456,13 +522,20 @@ swap glyphs, wrap with overlay, return a static replacement node."
       (is-a? x <object>)
       (string? x) (not x)))
 
-(define (str-visible-length s) (string-display-width s))
+(define (str-visible-length s)
+  "Return the on-screen cell width of string S, accounting for
+zero-width and wide characters."
+  (string-display-width s))
 
 (define-syntax-rule (memo getter setter node expr)
   (or (getter node)
       (let ((v expr)) (setter node v) v)))
 
 (define (compute-size node)
+  "Compute NODE's intrinsic (width . height) in cells.  Memoised in
+each node's cache slot.  Recursive: container sizes are derived from
+their children's sizes.  Strings, #f, and GOOPS instances without a
+known size return zero or a string-width fallback."
   (cond
    ((not node) (cons 0 0))
    ((string? node) (cons (string-display-width node) 1))
@@ -514,7 +587,8 @@ swap glyphs, wrap with overlay, return a static replacement node."
    ((align-node? node)
     (memo align-node-cache set-align-node-cache! node
           (let ((s (view-size (align-node-child node))))
-            (cons (or (align-node-width node) (car s)) (cdr s)))))
+            (cons (or (align-node-width  node) (car s))
+                  (or (align-node-height node) (cdr s))))))
    ((width-node? node)
     (memo width-node-cache set-width-node-cache! node
           (let ((s (view-size (width-node-child node))))
@@ -545,9 +619,14 @@ swap glyphs, wrap with overlay, return a static replacement node."
     (cons 0 0))
    (else (cons 0 0))))
 
-(define (view-size node) (compute-size node))
+(define (view-size node)
+  "Return NODE's intrinsic size as a cons (WIDTH . HEIGHT)."
+  (compute-size node))
 
 (define (invalidate-size! node)
+  "Drop NODE's cached intrinsic size so the next view-size call
+recomputes it.  Use after mutating NODE's structure (e.g. adding a
+vbox child).  Static nodes also lose their cached cmds and rect."
   (cond
    ((text-node? node)    (set-text-node-cache!    node #f))
    ((fill-node? node)    (set-fill-node-cache!    node #f))

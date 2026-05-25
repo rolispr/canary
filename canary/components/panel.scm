@@ -40,8 +40,8 @@
 #:content keyword arguments."
   (apply make <panel> args))
 
-(define-method (view (p <panel>) sz)
-  "Render <panel> P at size SZ: P's content boxed with the configured
+(define-method (view (p <panel>))
+  "Render <panel> P: P's content boxed with the configured
 border, title, optional footer, and base face.  When a hover-face is
 configured, wrap in `on-hover` so the frame face/border swap on
 pointer hover."

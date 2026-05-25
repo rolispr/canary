@@ -37,9 +37,9 @@
 keyword arguments."
   (apply make <button> args))
 
-(define-method (view (b <button>) sz)
-  "Render <button> B at size SZ: a bordered label whose face flips
-to button-focused-face when B is focused, wrapped in `on-click` so
+(define-method (view (b <button>))
+  "Render <button> B: a bordered label whose face flips to
+button-focused-face when B is focused, wrapped in `on-click` so
 the configured action fires on press."
   (let* ((focused? (button-focused? b))
          (face     (if focused? (button-focused-face b) (button-face b))))

@@ -6,11 +6,15 @@
   #:export (term-process-output!))
 
 (define (control-byte? ch)
+  "Return #t if CH is a C0 control byte (0-31) or DEL (127)."
   (let ((code (char->integer ch)))
     (or (<= code 31)
         (= code 127))))
 
 (define (term-process-output! term str)
+  "Feed STR to TERM's emulator one byte at a time, advancing the
+parser state machine through ground / ESC / CSI / OSC / DCS modes
+and dispatching the resulting control sequences."
   (let ((len (string-length str)))
     (let loop ((idx 0))
       (when (< idx len)
@@ -38,6 +42,10 @@
           (loop idx))))))
 
 (define (handle-ground term str idx len)
+  "Parse STR from IDX while in the ground state.  Writes a run of
+printable chars in one call to term-write!, then handles the
+single control byte that broke the run (BEL / BS / TAB / LF / VT /
+FF / CR / SO / SI / ESC).  Returns the new IDX."
   (let ((span-start idx)
         (i idx))
     (let scan ()
@@ -87,6 +95,9 @@
          (else next-idx)))))))
 
 (define (handle-esc term str idx len)
+  "Handle the byte after ESC: charset designators, save/restore,
+index/reverse-index, CSI/OSC/DCS introducers, full reset, and
+charset shifts.  Returns the new IDX."
   (let ((ch (string-ref str idx))
         (next-idx (+ idx 1)))
     (set-term-parser-state! term #f)
@@ -118,6 +129,9 @@
     next-idx))
 
 (define (handle-charset term str idx len slot)
+  "Designate a charset into SLOT (g0..g3) from the next byte:
+'B → us-ascii, '0 → dec-line-drawing; anything else falls back to
+us-ascii."
   (let ((ch (string-ref str idx)))
     (set-term-parser-state! term #f)
     (let ((charset (case ch
@@ -132,6 +146,9 @@
     (+ idx 1)))
 
 (define (handle-csi-fmt term str idx len)
+  "Read the optional CSI private-format byte ('?', '>', '=') and
+transition to csi-params, or transition directly when no format
+byte is present."
   (let ((ch (string-ref str idx)))
     (cond
      ((char=? ch #\?)
@@ -152,6 +169,11 @@
       idx))))
 
 (define (handle-csi-params term str idx len)
+  "Accumulate CSI parameter bytes (digits, ';' separators, ':'
+sub-separators) into TERM's csi-params slot.  On ':' the head
+param is promoted to an ordered sublist so SGR extended colour
+sequences can carry sub-parameters.  Hands off to csi-fn on
+encountering a non-param byte."
   (let ((ch (string-ref str idx)))
     (cond
      ((and (char>=? ch #\0) (char<=? ch #\9))
@@ -166,13 +188,11 @@
       (set-term-csi-params! term (cons #f (term-csi-params term)))
       (+ idx 1))
      ((char=? ch #\:)
-      ;; Promote head into a sublist (kept ordered).
       (let* ((params (term-csi-params term))
              (head (car params))
              (rest (cdr params)))
         (cond
          ((pair? head)
-          ;; Already a sublist: append a new slot.
           (set-term-csi-params! term (cons (append head (list #f)) rest)))
          (else
           (set-term-csi-params! term (cons (list head #f) rest))))
@@ -182,6 +202,8 @@
       idx))))
 
 (define (handle-csi-fn term str idx len)
+  "Read the CSI final byte (range @..~), dispatch the CSI to its
+handler, and return to ground state."
   (let ((ch (string-ref str idx)))
     (cond
      ((and (char>=? ch #\@) (char<=? ch #\~))
@@ -193,6 +215,9 @@
      (else (+ idx 1)))))
 
 (define (handle-osc term str idx len)
+  "Accumulate an OSC payload until ST (BEL or ESC\\) terminates it,
+then dispatch.  Strips the trailing ESC when the terminator is the
+two-byte form."
   (let scan ((i idx))
     (cond
      ((= i len)
@@ -209,7 +234,6 @@
                (char=? (string-ref (term-osc-buf term)
                                    (- (string-length (term-osc-buf term)) 1))
                        #\esc))
-          ;; ST = ESC \ ; strip trailing ESC
           (set-term-osc-buf!
            term (substring (term-osc-buf term) 0
                         (- (string-length (term-osc-buf term)) 1))))
@@ -221,7 +245,9 @@
      (else (scan (+ i 1))))))
 
 (define (handle-dcs term str idx len)
-  ;; Skip until ESC \\ ST.
+  "Skip a DCS (Device Control String) payload up to and including
+its ESC\\ ST terminator.  The contents are discarded; canary
+doesn't honour any DCS sequences yet."
   (let scan ((i idx))
     (cond
      ((>= i len) len)
@@ -233,6 +259,10 @@
      (else (scan (+ i 1))))))
 
 (define (dispatch-csi term ch fmt params)
+  "Dispatch a CSI ending in final byte CH with private FMT byte
+(or #f) and decoded PARAMS list to the appropriate term op.  Covers
+cursor movement, line/char insert/delete, erase, scroll, SGR, set
+modes, scroll region, save/restore cursor, device queries."
   (let ((p1 (and (pair? params) (car params)))
         (p2 (and (pair? params) (pair? (cdr params)) (cadr params))))
     (define (or1 v) (or v 1))
@@ -288,6 +318,8 @@
      (else #f))))
 
 (define (dispatch-device-attrs term n fmt)
+  "Reply to a Device Attributes (DA1 / DA2) query via TERM's
+input-fn, identifying as a VT102-class terminal."
   (when (term-input-fn term)
     (cond
      ((not fmt)
@@ -298,6 +330,8 @@
         ((term-input-fn term) term (string #\esc #\[ #\> #\0 #\; #\0 #\; #\0 #\c)))))))
 
 (define (dispatch-device-status term n)
+  "Reply to a Device Status Report query via TERM's input-fn.
+N=5 → \"OK\" report; N=6 → cursor position report."
   (when (term-input-fn term)
     (case n
       ((5) ((term-input-fn term) term (string #\esc #\[ #\0 #\n)))
@@ -314,10 +348,16 @@
     blinking-bar bar))
 
 (define (dispatch-cursor-style term style)
+  "Set TERM's cursor style from the DECSCUSR numeric STYLE (0-6,
+mapped to the blink/steady block/underline/bar variants)."
   (when (and (>= style 0) (<= style 6))
     (set-term-cursor-style! term (vector-ref *cursor-styles* style))))
 
 (define (dispatch-set-modes term params fmt set?)
+  "Apply CSI h/l mode-set/reset for each parameter in PARAMS.
+FMT distinguishes ANSI modes (#f, e.g. insert mode 4) from DEC
+private modes (#\\?, e.g. cursor visibility, alt-screen, bracketed
+paste).  SET? is #t for h (set), #f for l (reset)."
   (for-each
    (lambda (p)
      (when p
@@ -356,6 +396,9 @@
    params))
 
 (define (dispatch-osc term s)
+  "Dispatch an OSC payload S (already stripped of introducer and
+terminator) by its leading numeric code: 0/2 set the window title,
+7 sets the cwd, 10/11 reply to fg/bg colour queries."
   (let ((semi (string-index s #\;)))
     (when semi
       (let ((code (substring s 0 semi))
@@ -379,6 +422,7 @@
                             (string #\esc) "\\")))))))))
 
 (define (string-index s ch)
+  "Return the index of the first occurrence of CH in S, or #f."
   (let ((len (string-length s)))
     (let loop ((i 0))
       (cond

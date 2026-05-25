@@ -42,11 +42,11 @@
 #:focused? keyword arguments."
   (apply make <textinput> args))
 
-(define-method (view (ti <textinput>) sz)
-  "Render <textinput> TI at size SZ: the prompt followed by the
-value or, if empty, the placeholder.  When focused, draws a reverse-
-video cell at the cursor position; horizontally scrolls when value
-length exceeds width."
+(define-method (view (ti <textinput>))
+  "Render <textinput> TI: the prompt followed by the value or, if
+empty, the placeholder.  When focused, draws a reverse-video cell
+at the cursor position; horizontally scrolls when value length
+exceeds width."
   (let* ((val      (textinput-value ti))
          (prompt   (textinput-prompt ti))
          (w        (textinput-width ti))
@@ -77,7 +77,7 @@ length exceeds width."
                     (txt cell #:reverse) (txt right)))
             (hbox (txt prompt) (txt visible))))))))
 
-(define-method (update (ti <textinput>) msg sz)
+(define-method (update (ti <textinput>) msg)
   "React to MSG for <textinput> TI.  Mouse press repositions the
 cursor.  Keys handled: backspace, delete, left, right, home, end,
 and self-inserting chars (subject to char-limit when non-zero).

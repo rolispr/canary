@@ -43,8 +43,8 @@ when total is zero."
   (let ((c (progress-current p)) (t (progress-total p)))
     (if (zero? t) 0 (inexact->exact (floor (* 100 (/ c t)))))))
 
-(define-method (view (p <progress>) sz)
-  "Render <progress> P at size SZ: bracketed bar of progress-width
+(define-method (view (p <progress>))
+  "Render <progress> P: bracketed bar of progress-width
 cells, filled with █ in filled-face and ░ in empty-face, optionally
 followed by a percent label."
   (let* ((pct    (progress-percent p))

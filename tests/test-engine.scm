@@ -14,25 +14,25 @@
 (define-class <tape> ()
   (seen #:init-value '() #:accessor tape-seen))
 
-(define-method (view (t <tape>) sz) (txt "tape"))
+(define-method (view (t <tape>)) (txt "tape"))
 
-(define-method (update (t <tape>) msg sz)
+(define-method (update (t <tape>) msg)
   (set! (tape-seen t) (cons msg (tape-seen t)))
   (values t #f))
 
 (let ((t (make <tape>)))
-  (update t 'a #f)
-  (update t 'b #f)
-  (update t 'c #f)
+  (update t 'a)
+  (update t 'b)
+  (update t 'c)
   (test-equal "update receives msgs in order"
     '(a b c) (reverse (tape-seen t))))
 
 (define-class <ticker> ()
   (installed? #:init-value #f #:accessor ticker-installed?))
 
-(define-method (view (n <ticker>) sz) (txt "tk"))
+(define-method (view (n <ticker>)) (txt "tk"))
 
-(define-method (update (n <ticker>) msg sz)
+(define-method (update (n <ticker>) msg)
   (cond
    ((init? msg)
     (set! (ticker-installed? n) #t)
@@ -40,7 +40,7 @@
    (else (values n #f))))
 
 (let ((n (make <ticker>)))
-  (call-with-values (lambda () (update n (init) #f))
+  (call-with-values (lambda () (update n (init)))
     (lambda (n2 cmd)
       (test-equal  "init returns cmd"   'pretend-cmd cmd)
       (test-assert "init mutated state" (ticker-installed? n)))))

@@ -153,7 +153,7 @@
 ;; Startup: tick the sprite at 12hz and put the textinput in the focus
 ;; chain so the user's keys go there. The spinner installs its own
 ;; ticker via its <init> method when the cascade reaches it.
-(define-method (update (m <tweet>) (msg <init>) sz)
+(define-method (update (m <tweet>) (msg <init>))
   (values m (batch (every #:hz 12 (lambda () (tick)))
                    (focus (tweet-input m)))))
 
@@ -171,12 +171,12 @@
           (cons (make <note> #:glyph (string ch))
                 (tweet-notes m)))))
 
-(define-method (update (m <tweet>) (msg <tick>) sz)
+(define-method (update (m <tweet>) (msg <tick>))
   (set! (tweet-frame m) (+ (tweet-frame m) 1))
   (set! (tweet-notes m) (advance-notes! (tweet-notes m)))
   (values m #f))
 
-(define-method (update (m <tweet>) (msg <key>) sz)
+(define-method (update (m <tweet>) (msg <key>))
   ;; The textinput is embedded in our view tree and focused at <init>,
   ;; so the engine routes keys to it through the focus chain — no
   ;; manual forward needed. We get the key too (we're on the chain as
@@ -189,7 +189,7 @@
      ((char? ch) (spawn-note! m ch))))
   (values m #f))
 
-(define-method (update (m <tweet>) msg sz)
+(define-method (update (m <tweet>) msg)
   (values m #f))
 
 (define (status-bar m cols)
@@ -198,7 +198,7 @@
         (spacer #:w (max 0 (- cols 26)))
         (txt (format #f "frame ~4d" (tweet-frame m)) #:fg 'muted)))
 
-(define-method (view (m <tweet>) sz)
+(define-method (view (m <tweet>))
   (let* ((cols   (size-width sz))
          (rows   (size-height sz))
          (sprite (sprite-node-for (tweet-frame m)))

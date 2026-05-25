@@ -21,12 +21,16 @@
     h))
 
 (define (translate-charset ch charset)
+  "Map character CH through the active CHARSET designation.  Only
+'dec-line-drawing translates; other charsets pass CH through."
   (case charset
     ((dec-line-drawing)
      (or (hash-ref *dec-line-drawing* ch) ch))
     (else ch)))
 
 (define (current-charset-mapping term)
+  "Return the charset symbol currently designated to TERM's active
+slot (G0/G1/G2/G3)."
   (case (term-active-charset term)
     ((g0) (term-g0 term))
     ((g1) (term-g1 term))
@@ -36,6 +40,10 @@
 
 
 (define (current-write-face term)
+  "Return TERM's current face attrs as a stable, snapshotted copy.
+Reuses the cached snapshot when attrs haven't changed since last
+write; otherwise copies and caches.  Lets downstream cell writes
+share face identity by `eq?`."
   (let ((cur (term-attrs term))
         (cached (term-last-write-face term)))
     (if (and cached (face-attrs-equal? cached cur))
@@ -45,6 +53,11 @@
           c))))
 
 (define* (term-write! term str #:optional (start 0) (end #f))
+  "Write the substring of STR from START to END (default whole STR)
+to TERM at the current cursor, advancing the cursor and honouring
+auto-margin, insert mode, charset translation, and wide-character
+sentinel placement.  Zero-width chars are skipped; wide chars
+occupy two cells with a sentinel in the second."
   (let* ((end (or end (string-length str)))
          (w (term-width term))
          (charset (current-charset-mapping term))

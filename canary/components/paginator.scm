@@ -92,14 +92,14 @@ dot in accent face and the rest in muted."
   (txt (format #f "~d/~d" (+ 1 (paginator-page p)) (paginator-total-pages p))
        #:fg 'muted))
 
-(define-method (view (p <paginator>) sz)
-  "Render <paginator> P at size SZ, dispatching on P's type slot
-('dots or 'arabic, defaulting to arabic)."
+(define-method (view (p <paginator>))
+  "Render <paginator> P, dispatching on P's type slot ('dots or
+'arabic, defaulting to arabic)."
   (case (paginator-type p)
     ((dots) (paginator-dots-view p))
     (else   (paginator-arabic-view p))))
 
-(define-method (update (p <paginator>) msg sz)
+(define-method (update (p <paginator>) msg)
   "React to MSG for <paginator> P.  Right / page-down / `l` advances
 the page; left / page-up / `h` retreats.  Other input is ignored.
 Returns two values: P (mutated in place) and #f (no cmd)."

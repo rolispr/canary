@@ -8,14 +8,14 @@
 (define-class <counter> ()
   (n #:init-keyword #:n #:init-value 0 #:accessor counter-n))
 
-(define-method (view (c <counter>) sz)
+(define-method (view (c <counter>))
   (vbox (txt "  press + or - (q to quit)" #:fg 'muted)
         (spacer 1)
         (align (txt (number->string (counter-n c))
                     #:fg 'accent #:bold)
                'center #:width 40)))
 
-(define-method (update (c <counter>) (msg <key>) sz)
+(define-method (update (c <counter>) (msg <key>))
   (let ((k (key-sym msg)))
     (cond
      ((or (eqv? k #\+) (eqv? k #\k))
@@ -25,7 +25,7 @@
      ((eqv? k #\r) (set! (counter-n c) 0))))
   (values c #f))
 
-(define-method (update (c <counter>) msg sz) (values c #f))
+(define-method (update (c <counter>) msg) (values c #f))
 
 (run-app (make <counter>)
          #:title  "counter"

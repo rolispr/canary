@@ -33,7 +33,8 @@
 (define (random-element xs) (list-ref xs (random (length xs))))
 
 (define-class <chat> ()
-  (history  #:init-form (make-viewport #:step 1 #:tail? #t) #:accessor chat-history)
+  (history  #:init-form (make-viewport #:step 1 #:from 'bottom)
+            #:accessor chat-history)
   (input    #:init-form (make-textinput #:prompt "> "
                                         #:placeholder "say something"
                                         #:width 60
@@ -46,8 +47,7 @@
                      (txt text)))
          (vp   (chat-history c)))
     (set! (viewport-items vp)
-          (append (viewport-items vp) (list line)))
-    (viewport-scroll-to-end! vp)))
+          (append (viewport-items vp) (list line)))))
 
 (define (post-user-msg! c text)
   (chat-append-line! c 'accent "you" text))
@@ -63,15 +63,16 @@
     ((history) (focus (chat-history c)))
     (else      #f)))
 
-(define-method (view (c <chat>) sz)
+(define-method (view (c <chat>))
   (vbox
-   (flex (boxed (chat-history c)
+   (flex (boxed (align (chat-history c) #:v 'bottom)
                 #:title (case (chat-focus-on c)
                           ((history) " chat — history focused (tab to type) ")
                           (else      " chat "))
                 #:fg (case (chat-focus-on c)
                        ((history) 'accent)
-                       (else      'muted))))
+                       (else      'muted)))
+         #:shrink 1)
    (flex (boxed (chat-input c)
                 #:title (case (chat-focus-on c)
                           ((input)  " input — tab to scroll history ")
@@ -81,7 +82,7 @@
                        (else    'muted)))
          #:grow 0)))
 
-(define-method (update (c <chat>) (msg <init>) sz)
+(define-method (update (c <chat>) (msg <init>))
   ;; Greet, install the bot, focus the input.
   (chat-append-line! c 'muted "system" "welcome — type and press enter")
   (values c (batch (focus (chat-input c))
@@ -93,7 +94,7 @@
   (or (eq? k 'enter) (eq? k 'return)
       (eqv? k #\newline) (eqv? k #\return)))
 
-(define-method (update (c <chat>) (msg <key>) sz)
+(define-method (update (c <chat>) (msg <key>))
   (let ((k (key-sym msg)))
     (cond
      ((eq? k 'escape) (values c 'quit))
@@ -114,7 +115,7 @@
       (values c #f))
      (else (values c #f)))))
 
-(define-method (update (c <chat>) msg sz)
+(define-method (update (c <chat>) msg)
   (cond
    ((and (pair? msg) (eq? (car msg) 'bot-tick))
     (post-bot-msg! c)

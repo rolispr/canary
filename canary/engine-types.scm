@@ -28,11 +28,6 @@
             engine-focus-chain set-engine-focus-chain!
             engine-subs))
 
-;; The engine record. Shared by (canary engine) which runs the loop
-;; and (canary cmd) which dispatches side-effect commands. No <app>
-;; class — the engine is internal plumbing, not something users
-;; subclass. Users supply a root node via run-app and a few kwargs;
-;; the rest is bookkeeping the engine owns.
 (define-record-type <engine>
   (%make-engine backend theme keymap title mouse-mode cursor alt-screen?
                 filter root running? msg-queue queue-mutex msg-bell

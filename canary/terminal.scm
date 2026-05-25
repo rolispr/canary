@@ -70,7 +70,6 @@ call so `exit-raw-mode` can restore them.  Errors when stdin is not
 a TTY or termios syscalls fail."
   (unless (= 1 (%isatty %stdin-fd))
     (error "stdin is not a TTY"))
-  ;; Set termios to raw mode
   (let ((termios (make-bytevector %termios-size 0)))
     (when (< (%tcgetattr %stdin-fd (bytevector->pointer termios)) 0)
       (error "tcgetattr failed"))
@@ -79,7 +78,6 @@ a TTY or termios syscalls fail."
     (%cfmakeraw (bytevector->pointer termios))
     (when (< (%tcsetattr %stdin-fd 0 (bytevector->pointer termios)) 0)
       (error "tcsetattr failed")))
-  ;; Set stdin to non-blocking
   (let ((flags (%fcntl %stdin-fd %F_GETFL 0)))
     (when (>= flags 0)
       (unless %original-flags
@@ -89,11 +87,9 @@ a TTY or termios syscalls fail."
 (define (exit-raw-mode)
   "Restore the termios state and stdin flags captured by the most
 recent `enter-raw-mode`.  No-op if raw mode wasn't entered."
-  ;; Restore original termios
   (when %original-termios
     (%tcsetattr %stdin-fd 0 (bytevector->pointer %original-termios))
     (set! %original-termios #f))
-  ;; Restore original flags
   (when %original-flags
     (%fcntl %stdin-fd %F_SETFL %original-flags)
     (set! %original-flags #f)))

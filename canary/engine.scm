@@ -63,18 +63,23 @@
   (text   log-entry-text))
 
 (define (engine-log! eng source level text)
+  "Append a log entry to ENG with origin SOURCE (a symbol like 'cmd
+or 'render), LEVEL (a symbol like 'info, 'warn, 'error), and TEXT.
+Trims to the engine's log-cap, dropping the oldest entries first."
   (let* ((entry   (make-log-entry (current-time) source level text))
          (entries (cons entry (engine-log-entries eng)))
          (cap     (engine-log-cap eng)))
     (set-engine-log-entries! eng
                              (if (> (length entries) cap) (take entries cap) entries))))
 
-;; backward-compat alias used by some tests
 (define log! engine-log!)
 
 ;;; ── msg queue + bell ───────────────────────────────────────────────
 
 (define (make-bell-pipe)
+  "Return an unbuffered ISO-8859-1 pipe used as a cross-fiber wakeup
+bell.  Writing any byte to the write end wakes a fiber blocked on
+the read end via wait-until-port-readable."
   (let ((p (pipe)))
     (set-port-encoding! (car p) "ISO-8859-1")
     (set-port-encoding! (cdr p) "ISO-8859-1")
@@ -82,10 +87,14 @@
     p))
 
 (define (ring! bell)
+  "Write a byte to BELL's write end, waking any fiber waiting on
+the read end."
   (write-char #\space (cdr bell))
   (force-output (cdr bell)))
 
 (define (drain-bell! bell)
+  "Consume any pending bytes on BELL's read end.  Called after a
+wakeup so the next ring! actually triggers a wait."
   (let ((rd (car bell)))
     (let loop ()
       (when (char-ready? rd) (read-char rd) (loop)))))
@@ -98,12 +107,16 @@
     (ring! (engine-msg-bell eng))))
 
 (define (drain-msgs! eng)
+  "Atomically take all enqueued msgs off ENG and return them in
+send order (oldest first).  Resets the queue to empty."
   (with-mutex (engine-queue-mutex eng)
     (let ((q (engine-msg-queue eng)))
       (set-engine-msg-queue! eng '())
       (reverse q))))
 
 (define (stop-engine! eng)
+  "Mark ENG stopped and wake the event and input loops via their
+bells so they can exit cleanly.  Safe to call from any fiber."
   (when (engine-running? eng)
     (set-engine-running?! eng #f)
     (ring! (engine-msg-bell eng))
@@ -112,6 +125,9 @@
 ;;; ── log overlay ────────────────────────────────────────────────────
 
 (define (default-render-log sz entries panel-h)
+  "Return a boxed log-overlay panel view at SZ, showing the most
+recent ENTRIES that fit in PANEL-H rows.  Source/level prefixes each
+line; colour reflects level."
   (let* ((cols    (size-width sz))
          (inner-w (max 1 (- cols 2)))
          (inner-h (max 1 (- panel-h 2)))
@@ -135,6 +151,9 @@
      #:fg 'muted)))
 
 (define (compose-log-overlay eng sz user-tree)
+  "Pin the log overlay onto USER-TREE for engine ENG at size SZ.
+No-op when log display is off or there are no entries.  Panel
+height is engine-log-height-frac of total rows, minimum 4."
   (let ((entries (engine-log-entries eng)))
     (cond
      ((or (not (engine-show-log? eng)) (null? entries)) user-tree)
@@ -150,6 +169,10 @@
 ;;; ── render-frame ───────────────────────────────────────────────────
 
 (define (render-frame eng)
+  "Render one frame of ENG: compose user tree with log overlay,
+flatten to draw cmds (preceded by a clear), split out clickable
+regions for hit-testing, and hand the rest to the backend.  Errors
+are logged, never raised."
   (catch #t
     (lambda ()
       (let* ((sz   (backend-size (engine-backend eng)))
@@ -168,6 +191,9 @@
 ;;; ── tree walker for msg cascade ────────────────────────────────────
 
 (define (walk-nodes node sz proc)
+  "Walk the view tree rooted at NODE, calling PROC on every GOOPS
+widget encountered.  Descends through layout containers; uses SZ
+when materialising lazy GOOPS subviews via memoized-view."
   (cond
    ((not node) #f)
    ((string? node) #f)
@@ -192,19 +218,19 @@
               (overlay-node-overlays node)))
    ((is-a? node <object>)
     (proc node)
-    (walk-nodes (memoized-view node sz) sz proc))
+    (walk-nodes (memoized-view node) sz proc))
    (else #f)))
 
 ;;; ── input + dispatch ───────────────────────────────────────────────
 
 (define (input-loop eng)
-  ;; Wait on EITHER input OR the engine's stop channel. Without the
-  ;; stop channel here, this fiber blocks forever on the input port
-  ;; after stop-engine! has been called (the only thing that would
-  ;; wake it is more bytes arriving on the port — which won't happen
-  ;; once the session is torn down). One zombie input-loop per ended
-  ;; session is a slow-motion fiber leak that eventually starves the
-  ;; scheduler.
+  "Read raw input from stdin and forward parsed msgs to ENG.  Coalesces
+mouse motion at ≤60 Hz to avoid drowning the queue.  Waits on either
+input arrival OR the engine's stop channel so stop-engine! can wake
+this fiber without a stray byte (otherwise it would block until the
+next keystroke, which never arrives once the session tears down — a
+slow-motion fiber leak that starves the scheduler in long-lived
+sessions)."
   (let ((wait-input (wait-until-port-readable-operation (current-input-port)))
         (wait-stop  (wait-until-port-readable-operation
                      (car (engine-stop-ch eng)))))
@@ -227,6 +253,9 @@
                    (else (drain last-mouse-time)))))))))))))
 
 (define (find-click-region regions x y)
+  "Return the topmost (last-added) click region in REGIONS whose
+rect contains cell (X, Y), or #f if none.  Reverses so later
+overlays win over earlier base layers."
   (let lp ((rs (reverse regions)))
     (cond
      ((null? rs) #f)
@@ -240,16 +269,21 @@
             (lp (cdr rs))))))))
 
 (define (mouse-left-press? msg)
+  "Return #t if MSG is a left-button press or click."
   (and (mouse? msg)
        (eqv? (mouse-button msg) 0)
        (memq (mouse-action msg) '(press click))))
 
 (define (mouse-right-press? msg)
+  "Return #t if MSG is a right-button press or click."
   (and (mouse? msg)
        (eqv? (mouse-button msg) 2)
        (memq (mouse-action msg) '(press click))))
 
 (define (note-mouse-pos! eng msg)
+  "Update ENG's cached mouse coordinates from MSG.  Returns #t if
+the cell changed, #f if unchanged — callers use this to decide
+whether the next frame needs a re-render (e.g. for hover restyle)."
   (let ((nx (mouse-x msg)) (ny (mouse-y msg)))
     (cond
      ((and (= nx (engine-mouse-x eng)) (= ny (engine-mouse-y eng))) #f)
@@ -258,12 +292,12 @@
       (set-engine-mouse-y! eng ny)
       #t))))
 
-(define (dispatch-update! eng node msg sz cmds-cell)
-  "Call (update node msg sz). Collect any cmd into CMDS-CELL (a 1-cons
+(define (dispatch-update! eng node msg cmds-cell)
+  "Call (update node msg). Collect any cmd into CMDS-CELL (a 1-cons
 list used as a mutable accumulator). Errors are logged, not raised."
   (catch #t
     (lambda ()
-      (call-with-values (lambda () (update node msg sz))
+      (call-with-values (lambda () (update node msg))
         (lambda vs
           (let ((cmd (cond ((null? vs) #f)
                            ((null? (cdr vs)) #f)
@@ -275,18 +309,25 @@ list used as a mutable accumulator). Errors are logged, not raised."
       (engine-log! eng 'update 'error (format #f "~a ~a" key args)))))
 
 (define (cmds->batched cmds)
+  "Collapse CMDS into a single cmd value for the engine to run.
+Empty → #f; singleton → unwrap; multiple → a `batch` cmd.  Reverses
+so cmds run in collection order."
   (cond
    ((null? cmds)       #f)
    ((null? (cdr cmds)) (car cmds))
    (else               (cons 'batch (reverse cmds)))))
 
 (define (cascade! eng msg)
+  "Broadcast MSG to every GOOPS widget in ENG's tree (depth-first),
+collecting their returned cmds.  Returns a single cmd (or #f) per
+cmds->batched.  Used for app-level msgs that should reach all
+widgets, not just the focused one."
   (let ((cmds-cell (list '()))
         (sz (backend-size (engine-backend eng))))
     (walk-nodes
      (engine-root eng)
      sz
-     (lambda (node) (dispatch-update! eng node msg sz cmds-cell)))
+     (lambda (node) (dispatch-update! eng node msg cmds-cell)))
     (cmds->batched (car cmds-cell))))
 
 (define (find-focus-path root sz target)
@@ -321,7 +362,7 @@ not reachable. Layout records aren't in the path; only GOOPS nodes."
       (let ((new-path (cons node path)))
         (cond
          ((eq? node target) (reverse new-path))
-         (else (walk (memoized-view node sz) new-path)))))
+         (else (walk (memoized-view node) new-path)))))
      (else #f)))
   (walk root '()))
 
@@ -338,19 +379,24 @@ visible effect — until the next (focus …) cmd refreshes the chain."
                     ((null? chain) (list (engine-root eng)))
                     (else (reverse chain)))))
       (for-each
-       (lambda (node) (dispatch-update! eng node msg sz cmds-cell))
+       (lambda (node) (dispatch-update! eng node msg cmds-cell))
        targets))
     (cmds->batched (car cmds-cell))))
 
-;; A sub-cell is a 1-element mutable box used by sub fibers to check if
-;; they've been canceled. The cancel mechanism is cooperative: the
-;; fiber's loop reads (car cell) after each iteration / before sending,
-;; and exits if #t. Canceling sets it to #t and removes the id from
-;; the engine's subs hash.
+(define (make-sub-cell)
+  "Return a fresh sub-cell: a 1-cons mutable cancel flag, initially
+#f.  Sub fibers poll its car each iteration to decide whether to
+exit."
+  (list #f))
 
-(define (make-sub-cell) (list #f))
-(define (sub-cell-stop! c) (set-car! c #t))
-(define (sub-cell-stopped? c) (car c))
+(define (sub-cell-stop! c)
+  "Flip sub-cell C's cancel flag to #t so its fiber exits on next
+poll."
+  (set-car! c #t))
+
+(define (sub-cell-stopped? c)
+  "Return #t if sub-cell C has been cancelled."
+  (car c))
 
 (define (install-sub! eng id kind fiber-body)
   "Install a sub identified by ID. KIND is 'every / 'after — used to
@@ -366,20 +412,31 @@ no-op — re-issuing the same sub from an update is idempotent."
       (spawn-fiber (lambda () (fiber-body cell)))))))
 
 (define (cancel-sub! eng id)
+  "Cancel the sub on ENG tagged ID.  Stops its fiber and removes
+the entry from the subs hash.  No-op if ID isn't installed."
   (let ((cell (hash-ref (engine-subs eng) id)))
     (when cell
       (sub-cell-stop! cell)
       (hash-remove! (engine-subs eng) id))))
 
 (define (apply-filter eng msg)
+  "Pass MSG through ENG's filter procedure if any, otherwise return
+MSG unchanged.  Filters may return #f to drop the msg."
   (let ((f (engine-filter eng)))
     (if f (f msg) msg)))
 
 (define (cmd-error! eng key args context)
+  "Log an error on ENG for a cmd that raised: CONTEXT identifies
+the cmd kind ('sequence / 'every / 'after / 'thunk); KEY and ARGS
+are the catch payload."
   (engine-log! eng 'cmd 'error
                (format #f "~a: ~a ~a" context key args)))
 
 (define (run-cmd! eng cmd)
+  "Interpret one cmd CMD on engine ENG.  Dispatches on the cmd's
+shape: bare symbols, tagged lists, and bare thunks.  Handles batch
+fan-out, sequence (in-order async), every/after sub installation,
+cancel, plus all screen and app cmds.  Unknown cmds are dropped."
   (let ((out (lambda () (ansi-backend-port (engine-backend eng))))
         (mark-dirty! (lambda ()
                        (set! (ansi-backend-prev-term (engine-backend eng)) #f))))
@@ -617,6 +674,11 @@ Routing policy:
       #t))))
 
 (define (event-loop eng)
+  "Main message-processing loop for ENG.  Sleeps on the msg-bell,
+drains the queue on wake, calls process-one on each msg, and
+re-renders if any handler reported a state change.  Renders use a
+fresh view cache per frame so widget subtrees don't leak across
+frames."
   (let ((rd (car (engine-msg-bell eng))))
     (let loop ()
       (when (engine-running? eng)
@@ -650,6 +712,10 @@ Routing policy:
 (define +stderr-line-cap+ 4096)
 
 (define (drain-stderr-pipe eng rport)
+  "Read bytes from RPORT (read end of a stderr pipe) and surface
+each complete line as a 'stderr 'warn log entry on ENG.  Truncates
+individual lines at +stderr-line-cap+ bytes so a runaway producer
+can't blow memory."
   (let ((acc (make-bytevector +stderr-line-cap+ 0))
         (pos 0)
         (wait (wait-until-port-readable-operation rport)))
@@ -681,6 +747,9 @@ Routing policy:
                       (list int int)))
 
 (define (apply-startup-cmds! eng)
+  "Run the cmds derived from ENG's initial configuration: window
+title, cursor mode, mouse-reporting mode, and alt-screen toggle if
+explicitly disabled."
   (when (engine-title eng)
     (run-cmd! eng (set-title (engine-title eng))))
   (run-cmd! eng (cursor (engine-cursor eng)))
@@ -689,6 +758,10 @@ Routing policy:
     (run-cmd! eng (alt-screen 'off))))
 
 (define (write-crash-log eng key args)
+  "Dump a crash summary for ENG to $XDG_CACHE_HOME/canary/last-crash.log
+when an uncaught exception escapes the top-level catch.  Includes
+the throw key/args plus the in-memory log ring.  Wrapped in
+false-if-exception so crash logging itself can't escalate."
   (false-if-exception
    (let* ((cache (or (getenv "XDG_CACHE_HOME")
                      (string-append (or (getenv "HOME") "/tmp") "/.cache")))
@@ -753,7 +826,6 @@ backend, plus log-overlay config."
          (cleanup-done #f)
          (stderr-pipe (pipe))
          (saved-stderr-fd #f))
-    ;; Keep backend's theme in sync
     (when (and th (ansi-backend? b))
       (set-ansi-backend-theme! b th))
     (define (do-cleanup)
@@ -772,12 +844,17 @@ backend, plus log-overlay config."
             (setup-signal-handlers do-cleanup)
             (setup-resize-handler
              (lambda ()
-               ;; Ask the terminal for its new size via \e[18t. The
-               ;; response \e[8;rows;cols t flows through the normal
-               ;; input pipeline as a <resize> msg. Portable across
-               ;; macOS where TIOCGWINSZ can be unreliable.
+               ;; SIGWINCH → read size via TIOCGWINSZ and synthesise a
+               ;; <resize> msg directly. Many terminals (gnome, foot,
+               ;; alacritty in some configs) silently drop \e[18t so
+               ;; the previous round-trip-based path produced no
+               ;; resize. ioctl works on Linux + macOS reliably.
                (catch #t
-                 (lambda () (request-window-size! (engine-backend eng)))
+                 (lambda ()
+                   (let ((sz (get-terminal-size)))
+                     (when sz
+                       (send eng (resize (size-width sz)
+                                         (size-height sz))))))
                  (lambda _ #f)))))
           (lambda ()
             (define (guarded name thunk)
@@ -790,7 +867,6 @@ backend, plus log-overlay config."
              (lambda ()
                (spawn-fiber (guarded 'event-loop (lambda () (event-loop eng))))
                (spawn-fiber (guarded 'input-loop (lambda () (input-loop eng))))
-               ;; <init> first → root react returns startup cmds.
                (send eng (make <init>))
                (let ((sz (backend-size (engine-backend eng))))
                  (send eng (resize (size-width sz) (size-height sz))))
@@ -805,5 +881,7 @@ backend, plus log-overlay config."
         (do-cleanup)
         (apply throw key args)))))
 
-;; ansi-backend? helper (predicate not exported by backend-ansi)
-(define (ansi-backend? b) (is-a? b <ansi-backend>))
+(define (ansi-backend? b)
+  "Return #t if B is an <ansi-backend>.  Local helper because the
+predicate isn't exported by (canary backend-ansi)."
+  (is-a? b <ansi-backend>))

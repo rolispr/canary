@@ -24,16 +24,16 @@ list.
 (define-class <counter> ()
   (n #:init-keyword #:n #:init-value 0 #:accessor counter-n))
 
-(define-method (view (c <counter>) sz)
+(define-method (view (c <counter>))
   (txt (number->string (counter-n c))))
 
-(define-method (update (c <counter>) (msg <key>) sz)
+(define-method (update (c <counter>) (msg <key>))
   (case (key-sym msg)
     ((#\+) (set! (counter-n c) (+ 1 (counter-n c))) (values c #f))
     ((#\-) (set! (counter-n c) (- (counter-n c) 1)) (values c #f))
     (else  (values c #f))))
 
-(define-method (update (c <counter>) msg sz) (values c #f))
+(define-method (update (c <counter>) msg) (values c #f))
 
 (run-app (make <counter>)
          #:title  "counter"
@@ -48,30 +48,51 @@ That's everything. A GOOPS class for state, methods for `view` and
 Two generics drive every node:
 
 ```
-view   : (lambda (self sz)     → child-node)
-update : (lambda (self msg sz) → (values self cmd-or-#f))   ; optional
+view   : (lambda (self)     → child-node)
+update : (lambda (self msg) → (values self cmd-or-#f))   ; optional
 ```
 
 Specialise them on your class. Startup logic is just `update`
 specialised on the `<init>` msg:
 
 ```scheme
-(define-method (update (c <my-app>) (msg <init>) sz)
+(define-method (update (c <my-app>) (msg <init>))
   (values c (load-cmd c)))           ; same (model, cmd) shape as every update
 ```
 
+No `sz` arg. Size is a renderer concern — the layout primitives
+(`flex`, `align`, `wrap`, `width`, `height`, `boxed`, `pad`, …) carry
+size-dependent behaviour through to render time. Author code composes
+the tree; the renderer interprets it in whatever rect it's given.
+
+When an app genuinely needs to know terminal cols/rows (e.g.
+size-dependent animation), it captures them from the `<resize>` msg
+into its own slots and reads from there — same `(model, cmd)` shape:
+
+```scheme
+(define-class <my-app> ()
+  (cols #:init-value 80 #:accessor my-cols)
+  (rows #:init-value 24 #:accessor my-rows)
+  ...)
+
+(define-method (update (a <my-app>) (msg <resize>))
+  (set! (my-cols a) (resize-width msg))
+  (set! (my-rows a) (resize-height msg))
+  (values a #f))
+```
+
 Layout records (`txt`, `vbox`, `hbox`, `boxed`, `pad`, `align`,
-`width`, `height`, `overlay`, `pin`, `on-click`, `on-hover`) are pure
-data — no methods, no state. The renderer walks them by type-check.
-When it reaches a GOOPS instance in the tree, it calls `(view instance
-sz)` to expand.
+`width`, `height`, `overlay`, `pin`, `on-click`, `on-hover`, `flex`,
+`wrap`) are pure data — no methods, no state. The renderer walks them
+by type-check. When it reaches a GOOPS instance in the tree, it calls
+`(view instance)` to expand.
 
 The engine:
 
 - runs a channel-backed event loop
 - reads input (keys, mouse) and emits typed msgs
-- renders `(view root sz)`, populates click regions, draws cell diffs
-- on each msg, walks the rendered tree and calls `(update node msg sz)`
+- renders `(view root)`, populates click regions, draws cell diffs
+- on each msg, walks the rendered tree and calls `(update node msg)`
   on every GOOPS instance found
 - collects cmds from each update's second return value, batches them,
   runs them
@@ -85,7 +106,7 @@ nothing.
 
 `view` returns a tree of nodes — layout records and GOOPS instances
 mixed freely. **Embed widgets by instance reference, never by
-expanding them via `(view child sz)` in your own view.** The renderer
+expanding them via `(view child)` in your own view.** The renderer
 calls `view` on a GOOPS instance for you; the cascade walks the tree
 and dispatches `update` on every instance it finds. There is no
 container that "doesn't support widgets": every layout primitive that
@@ -96,9 +117,9 @@ takes a child also takes a GOOPS child.
   (lines #:init-value '()             #:accessor chat-lines)
   (input #:init-form (make-textinput) #:accessor chat-input))
 
-(define-method (view (c <chat>) sz)
+(define-method (view (c <chat>))
   (vbox (apply vbox (map (lambda (l) (txt l)) (chat-lines c)))
-        (chat-input c)))                ; ← the <textinput>, not (view it sz)
+        (chat-input c)))                ; ← the <textinput>, not (view it)
 ```
 
 Nest as deep as you want:
@@ -121,7 +142,7 @@ given msg fall through the default catch-all and return
 
 ```scheme
 ;; DON'T: cascade can't see the textinput through expanded layout records.
-(vbox (view (chat-input c) sz))
+(vbox (view (chat-input c)))
 ```
 
 Use `(chat-input c)`. The engine expands it for rendering and visits
@@ -137,7 +158,7 @@ tree from both consuming a typed character.
 Default focus is the root widget. Move focus with the `focus` cmd:
 
 ```scheme
-(define-method (update (c <chat>) (msg <init>) sz)
+(define-method (update (c <chat>) (msg <init>))
   (values c (focus (chat-input c))))    ; ← input gets keys from the first frame
 ```
 
@@ -148,7 +169,7 @@ the chain, so a textinput can insert a char and chat above it can
 still see enter and append a line — both fire in order:
 
 ```scheme
-(define-method (update (c <chat>) (msg <key>) sz)
+(define-method (update (c <chat>) (msg <key>))
   (when (eq? (key-sym msg) 'return)
     (let ((val (textinput-value (chat-input c))))
       (unless (zero? (string-length val))
@@ -176,12 +197,12 @@ is already installed). `(cancel k)` stops it.
 
 ```scheme
 ;; A spinner that ticks only while loading.
-(define-method (update (c <my>) (msg <init>) sz) (values c #f))
+(define-method (update (c <my>) (msg <init>)) (values c #f))
 
-(define-method (update (c <my>) (msg <load-start>) sz)
+(define-method (update (c <my>) (msg <load-start>))
   (values c (every #:hz 10 #:id 'spinner-tick (lambda () (tick)))))
 
-(define-method (update (c <my>) (msg <load-done>) sz)
+(define-method (update (c <my>) (msg <load-done>))
   (values c (cancel 'spinner-tick)))
 ```
 
@@ -198,7 +219,7 @@ make repl
 
 opens a Geiser-listenable image. From an Emacs/VS Code Geiser session:
 
-- `C-M-x` on a `(define-method (view (c <counter>) sz) …)` form
+- `C-M-x` on a `(define-method (view (c <counter>)) …)` form
   replaces the method body. Existing instances dispatch to the new
   body on the next render.
 - `C-M-x` on a `(define-class <counter> () …)` form triggers Guile's
@@ -229,9 +250,9 @@ Engine-emitted records matched in `update`.
 Multi-method dispatch on the msg class is the natural shape:
 
 ```scheme
-(define-method (update (c <my>) (msg <tick>) sz) …)
-(define-method (update (c <my>) (msg <key>)  sz) …)
-(define-method (update (c <my>) msg sz) (values c #f))   ; catch-all
+(define-method (update (c <my>) (msg <tick>)) …)
+(define-method (update (c <my>) (msg <key>))  …)
+(define-method (update (c <my>) msg) (values c #f))   ; catch-all
 ```
 
 ## Cmds
@@ -369,7 +390,8 @@ Containers:
 (spacer #:w n)                            ; width  in hbox
 (pad    child #:top n #:left n …)         ; inner whitespace
 (margin child #:top n #:left n …)         ; outer whitespace
-(align  child 'left│'center│'right #:width n)
+(align  child #:h 'left│'center│'right #:v 'top│'middle│'bottom
+              #:width n #:height n)        ; positions child within its rect
 (width  child n)
 (height child n #:valign 'top│'center│'bottom)
 (fill   w h #:bg 'name-or-hex)
@@ -385,6 +407,35 @@ Containers:
 
 `pad` and `margin` are distinct: `pad` adds space *inside* a
 boxed/styled region, `margin` adds space *outside*.
+
+### Align
+
+`align` positions a child within the rect it's been given. Modes on
+each axis:
+
+- horizontal: `'left` (default), `'center`, `'right`
+- vertical: `'top` (default), `'middle`, `'bottom`
+
+Pass either via kwargs (`#:h`, `#:v`) or positionally — the modes
+self-classify, so `(align child 'center)` is horizontal-center,
+`(align child 'middle)` is vertical-middle, `(align child 'center
+'middle)` is centered on both axes. `#:width` / `#:height` pin the
+alignment slot explicitly; otherwise it inherits the rect's full
+dimension on that axis.
+
+When the child overflows the slot, the anchored edge stays inside
+the rect and the opposite edge clips. `(align child #:v 'bottom)`
+with a vbox of 1000 lines in a 24-row rect shows the last 24 lines
+— the top of the vbox renders off the rect and the term grid drops
+out-of-range writes. Same on the horizontal axis with `#:h 'right`.
+Use this for chat-style tail-anchoring, right-aligned status, or
+centered-overflow content — no magic numbers, no size-state needed.
+
+```scheme
+(align (vbox banner subtitle …) #:h 'center #:v 'middle)   ; splash
+(align history-vbox #:v 'bottom)                            ; chat tail
+(align timestamp #:h 'right)                                ; status
+```
 
 ### Flex
 

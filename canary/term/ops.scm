@@ -31,42 +31,55 @@
             term-current-bg-face))
 
 (define (clamp-min v lo)
+  "Return V if V ≥ LO, otherwise LO."
   (if (< v lo) lo v))
 
 (define* (term-cursor-right! term #:optional (n 1))
+  "Move TERM's cursor right by N cells, clamped to the rightmost
+column."
   (let ((n (clamp-min n 1))
         (max-x (- (term-width term) 1)))
     (set-term-cursor-x! term (min (+ (term-cursor-x term) n) max-x))))
 
 (define* (term-cursor-left! term #:optional (n 1))
+  "Move TERM's cursor left by N cells, clamped to column 0."
   (let ((n (clamp-min n 1)))
     (set-term-cursor-x! term (max (- (term-cursor-x term) n) 0))))
 
 (define* (term-cursor-down! term #:optional (n 1))
+  "Move TERM's cursor down by N cells, clamped to the bottom row."
   (let ((n (clamp-min n 1))
         (max-y (- (term-height term) 1)))
     (set-term-cursor-y! term (min (+ (term-cursor-y term) n) max-y))))
 
 (define* (term-cursor-up! term #:optional (n 1))
+  "Move TERM's cursor up by N cells, clamped to row 0."
   (let ((n (clamp-min n 1)))
     (set-term-cursor-y! term (max (- (term-cursor-y term) n) 0))))
 
 (define* (term-cursor-horizontal-abs! term #:optional (n 1))
+  "Position TERM's cursor at 1-indexed column N (clamped to grid)."
   (set-term-cursor-x! term (min (max (- n 1) 0) (- (term-width term) 1))))
 
 (define* (term-cursor-vertical-abs! term #:optional (n 1))
+  "Position TERM's cursor at 1-indexed row N (clamped to grid)."
   (set-term-cursor-y! term (min (max (- n 1) 0) (- (term-height term) 1))))
 
 (define* (term-goto! term #:optional (y 1) (x 1))
+  "Position TERM's cursor at 1-indexed (X, Y), clamped to grid."
   (set-term-cursor-y! term (min (max (- (or y 1) 1) 0) (- (term-height term) 1)))
   (set-term-cursor-x! term (min (max (- (or x 1) 1) 0) (- (term-width term) 1))))
 
 (define (term-save-cursor! term)
+  "Snapshot TERM's cursor position and attribute state into the
+save slots, restorable via `term-restore-cursor!`."
   (set-term-saved-cursor-x! term (term-cursor-x term))
   (set-term-saved-cursor-y! term (term-cursor-y term))
   (set-term-saved-attrs! term (copy-face-attrs (term-attrs term))))
 
 (define (term-restore-cursor! term)
+  "Restore TERM's cursor position and attribute state from the
+slots saved by `term-save-cursor!`.  No-op if nothing was saved."
   (set-term-cursor-x! term (term-saved-cursor-x term))
   (set-term-cursor-y! term (term-saved-cursor-y term))
   (let ((saved (term-saved-attrs term)))
@@ -85,6 +98,9 @@
         (set-face-crossed! cur (face-crossed? saved))))))
 
 (define (term-current-bg-face term)
+  "Return TERM's current face if it has a non-default background,
+otherwise #f.  Reuses the write-face cache so erase cmds share face
+identity with adjacent writes."
   (and (face-bg (term-attrs term))
        (let ((cur (term-attrs term))
              (cached (term-last-write-face term)))
@@ -97,12 +113,16 @@
 (define %space (char->integer #\space))
 
 (define (fill-cells! chars faces start end face)
+  "Fill cells [START, END) of CHARS / FACES with spaces and FACE."
   (do ((i start (+ i 1)))
       ((= i end))
     (u32vector-set! chars i %space)
     (vector-set!    faces i face)))
 
 (define* (term-erase-in-line! term #:optional (mode 0))
+  "Erase part of the cursor's row.  MODE 0 erases from cursor to
+end of line (default), 1 erases from start of line to cursor, 2
+erases the whole line.  Erased cells take the current bg face."
   (let* ((y (term-cursor-y term))
          (x (term-cursor-x term))
          (w (term-width term))
@@ -116,6 +136,9 @@
       ((2) (fill-cells! chars faces base (+ base w) face)))))
 
 (define* (term-erase-in-display! term #:optional (mode 0))
+  "Erase part of the display.  MODE 0 erases from cursor to end of
+screen (default), 1 erases from start of screen to cursor, 2
+erases the whole screen, 3 also clears scrollback."
   (let* ((y (term-cursor-y term))
          (h (term-height term))
          (w (term-width term))
@@ -135,6 +158,8 @@
          (set-term-scrollback-size! term 0))))))
 
 (define* (term-erase-char! term #:optional (n 1))
+  "Replace N cells starting at the cursor with spaces in the
+current bg face.  Cursor position unchanged.  Clamped to row width."
   (let* ((n (clamp-min n 1))
          (y (term-cursor-y term))
          (x (term-cursor-x term))
@@ -166,6 +191,8 @@
         (vector-set!    faces di (vector-ref    faces si)))))))
 
 (define* (term-insert-char! term #:optional (n 1))
+  "Insert N blank cells at the cursor, shifting existing cells right
+within the row and dropping any that fall off the right edge."
   (let* ((n (clamp-min n 1))
          (y (term-cursor-y term))
          (x (term-cursor-x term))
@@ -181,6 +208,8 @@
     (fill-cells! chars faces (+ base x) (+ base x count) face)))
 
 (define* (term-delete-char! term #:optional (n 1))
+  "Delete N cells at the cursor, shifting following cells in the
+row left and filling the vacated right edge with bg-face spaces."
   (let* ((n (clamp-min n 1))
          (y (term-cursor-y term))
          (x (term-cursor-x term))
@@ -196,6 +225,8 @@
     (fill-cells! chars faces (+ base (- w count)) (+ base w) face)))
 
 (define (snapshot-row term y)
+  "Return a fresh (chars . faces) pair holding a copy of row Y of
+TERM.  Used by scrollback before a row is scrolled off."
   (let* ((w (term-width term))
          (chars (term-chars term))
          (faces (term-faces term))
@@ -209,6 +240,9 @@
     (cons cs fs)))
 
 (define (push-scrollback! term y)
+  "Push a snapshot of row Y onto TERM's scrollback ring.  Grows the
+ring up to max-scrollback; drops the push silently when full or
+when scrollback is disabled."
   (let ((sb (term-scrollback term))
         (max-sb (term-max-scrollback term)))
     (when (and sb (positive? max-sb))
@@ -226,9 +260,13 @@
         (set-term-scrollback-size! term (+ (term-scrollback-size term) 1))))))
 
 (define (copy-line! term src-y dst-y)
+  "Copy row SRC-Y of TERM over row DST-Y in place."
   (term-copy-row! term src-y dst-y))
 
 (define* (term-scroll-up! term #:optional (n 1))
+  "Scroll the scroll region up by N rows: rows shift toward the
+top, the bottom N rows clear.  When scrolling at the top of the
+main screen, pushes the displaced rows onto scrollback."
   (let* ((n (clamp-min n 1))
          (top (term-scroll-top term))
          (bot (term-scroll-bottom term))
@@ -247,6 +285,8 @@
         (term-clear-row! term y)))))
 
 (define* (term-scroll-down! term #:optional (n 1))
+  "Scroll the scroll region down by N rows: rows shift toward the
+bottom, the top N rows clear.  No scrollback effect."
   (let* ((n (clamp-min n 1))
          (top (term-scroll-top term))
          (bot (term-scroll-bottom term))
@@ -261,6 +301,9 @@
         (term-clear-row! term y)))))
 
 (define* (term-insert-line! term #:optional (n 1))
+  "Insert N blank lines at the cursor's row within the scroll region.
+Pushes lines below it down; lines pushed past the region's bottom
+are dropped."
   (let ((n (clamp-min n 1))
         (y (term-cursor-y term))
         (top (term-scroll-top term))
@@ -272,6 +315,8 @@
         (set-term-scroll-top! term old-top)))))
 
 (define* (term-delete-line! term #:optional (n 1))
+  "Delete N lines at the cursor's row within the scroll region.
+Lines below it shift up; the bottom N lines of the region clear."
   (let ((n (clamp-min n 1))
         (y (term-cursor-y term))
         (top (term-scroll-top term))
@@ -283,6 +328,8 @@
         (set-term-scroll-top! term old-top)))))
 
 (define* (term-horizontal-tab! term #:optional (n 1))
+  "Advance the cursor by N tab stops (every 8 columns), clamped to
+the rightmost column."
   (let* ((n (clamp-min n 1))
          (x (term-cursor-x term))
          (w (term-width term))
@@ -293,6 +340,8 @@
     (set-term-cursor-x! term (min next-tab (- w 1)))))
 
 (define* (term-horizontal-backtab! term #:optional (n 1))
+  "Retreat the cursor by N tab stops (every 8 columns), clamped to
+column 0."
   (let* ((n (clamp-min n 1))
          (x (term-cursor-x term))
          (prev-tab (if (zero? (modulo x 8))
@@ -304,6 +353,8 @@
     (set-term-cursor-x! term (max prev-tab 0))))
 
 (define (term-index! term)
+  "Move the cursor down one row; at the scroll bottom, scroll up
+instead.  Column unchanged."
   (let ((y (term-cursor-y term))
         (bot (term-scroll-bottom term)))
     (cond
@@ -312,6 +363,8 @@
       (set-term-cursor-y! term (+ y 1))))))
 
 (define (term-reverse-index! term)
+  "Move the cursor up one row; at the scroll top, scroll down
+instead.  Column unchanged."
   (let ((y (term-cursor-y term))
         (top (term-scroll-top term)))
     (cond
@@ -320,6 +373,8 @@
       (set-term-cursor-y! term (- y 1))))))
 
 (define (term-line-feed! term)
+  "CR+LF: reset cursor to column 0 and advance one row, scrolling
+at the bottom of the scroll region."
   (let* ((y (term-cursor-y term))
          (bot (term-scroll-bottom term)))
     (set-term-cursor-x! term 0)
@@ -329,9 +384,13 @@
       (set-term-cursor-y! term (+ y 1))))))
 
 (define (term-carriage-return! term)
+  "Reset the cursor to column 0 of its current row."
   (set-term-cursor-x! term 0))
 
 (define* (term-set-scroll-region! term #:optional top bottom)
+  "Set the scroll region to 1-indexed rows TOP through BOTTOM
+(inclusive) and home the cursor.  Ignored if the range is invalid;
+TOP defaults to 1 and BOTTOM to the terminal height."
   (let ((tv (or top 1))
         (bv (or bottom (term-height term))))
     (when (and (< 0 tv) (< tv bv) (<= bv (term-height term)))
@@ -340,6 +399,9 @@
       (term-goto! term 1 1))))
 
 (define (term-enter-alt-screen! term)
+  "Switch TERM into the alternate screen: stash main chars/faces,
+allocate fresh blank buffers, and home the cursor.  No-op if
+already in the alt screen."
   (unless (term-in-alt? term)
     (let* ((w (term-width term))
            (h (term-height term))
@@ -352,6 +414,9 @@
       (term-goto! term 1 1))))
 
 (define (term-exit-alt-screen! term)
+  "Switch TERM back to the main screen: restore the stashed main
+chars/faces and drop the alt buffers.  No-op if not in the alt
+screen."
   (when (term-in-alt? term)
     (set-term-chars! term (term-main-chars term))
     (set-term-faces! term (term-main-faces term))

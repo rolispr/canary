@@ -43,6 +43,9 @@
     p))
 
 (define (color-index->rgb i)
+  "Return the (R G B) vector for 256-colour palette index I (0-15
+base16, 16-231 6×6×6 colour cube, 232-255 grayscale ramp), or #f if
+I is out of range."
   (and (integer? i)
        (>= i 0)
        (< i 256)

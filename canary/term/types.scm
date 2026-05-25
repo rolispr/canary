@@ -98,19 +98,26 @@
                           (italic? #f) (underline #f) (ul-color #f)
                           (blink #f) (inverse? #f) (conceal? #f)
                           (crossed? #f))
+  "Return a fresh <face-attrs> with the given attribute slots.
+Each slot defaults to #f (unset)."
   (%make-face-attrs fg bg bold? faint? italic? underline ul-color
                     blink inverse? conceal? crossed?))
 
 (define (default-face-attrs)
+  "Return a fresh <face-attrs> with every slot unset.  Equivalent
+to `(make-face-attrs)` but skips the keyword parsing."
   (%make-face-attrs #f #f #f #f #f #f #f #f #f #f #f))
 
 (define (copy-face-attrs f)
+  "Return a fresh <face-attrs> whose slots are copied from F."
   (%make-face-attrs (face-fg f) (face-bg f) (face-bold? f)
                     (face-faint? f) (face-italic? f) (face-underline f)
                     (face-ul-color f) (face-blink f) (face-inverse? f)
                     (face-conceal? f) (face-crossed? f)))
 
 (define (face-attrs-equal? a b)
+  "Return #t if A and B carry the same attribute slot values.
+Eq-identical, both-#f, and slot-wise equal all qualify."
   (cond
    ((eq? a b) #t)
    ((or (not a) (not b)) #f)
@@ -128,6 +135,7 @@
          (eq? (face-crossed? a) (face-crossed? b))))))
 
 (define (reset-face-attrs! f)
+  "Clear every slot of <face-attrs> F to its unset state in place."
   (set-face-fg! f #f)
   (set-face-bg! f #f)
   (set-face-bold! f #f)
@@ -203,15 +211,27 @@
 ;; so we don't move the cursor or write garbage on top of the wide char.
 (define +wide-cont+ 0)
 
-(define (wide-cont? cp) (= cp +wide-cont+))
+(define (wide-cont? cp)
+  "Return #t if code point CP is the wide-char sentinel."
+  (= cp +wide-cont+))
 
-(define (alloc-chars n) (make-u32vector n %space))
-(define (alloc-faces n) (make-vector n #f))
+(define (alloc-chars n)
+  "Return a fresh u32vector of N cells, each initialised to space."
+  (make-u32vector n %space))
+
+(define (alloc-faces n)
+  "Return a fresh vector of N face slots, each initialised to #f."
+  (make-vector n #f))
 
 (define* (make-term #:key (width 80) (height 24)
                     (input-fn #f) (bell-fn #f)
                     (title-fn #f) (cwd-fn #f)
                     (max-scrollback 10000))
+  "Return a fresh <term> of WIDTH × HEIGHT cells.  INPUT-FN /
+BELL-FN / TITLE-FN / CWD-FN are optional callbacks invoked by the
+parser when the emulated program writes input / rings the bell /
+sets the title / reports the cwd.  MAX-SCROLLBACK caps the
+scrollback ring; 0 disables it."
   (let ((n (* width height)))
     (%make-term width height
                 (alloc-chars n) (alloc-faces n)
@@ -231,26 +251,36 @@
                 #f)))
 
 (define (term-index t x y)
+  "Return the flat cell-array index for cell (X, Y) in T."
   (+ (* y (term-width t)) x))
 
 (define (term-char-at t x y)
+  "Return the character at cell (X, Y) of T."
   (integer->char (u32vector-ref (term-chars t) (term-index t x y))))
 
 (define (term-face-at t x y)
+  "Return the face at cell (X, Y) of T (or #f for default)."
   (vector-ref (term-faces t) (term-index t x y)))
 
 (define (set-term-char-at! t x y ch)
+  "Write character CH into cell (X, Y) of T, leaving the face
+unchanged."
   (u32vector-set! (term-chars t) (term-index t x y) (char->integer ch)))
 
 (define (set-term-face-at! t x y face)
+  "Write FACE into cell (X, Y) of T, leaving the character
+unchanged."
   (vector-set! (term-faces t) (term-index t x y) face))
 
 (define (set-term-cell-at! t x y ch face)
+  "Write character CH with face FACE into cell (X, Y) of T."
   (let ((i (term-index t x y)))
     (u32vector-set! (term-chars t) i (char->integer ch))
     (vector-set! (term-faces t) i face)))
 
 (define* (term-clear! t #:optional (face #f))
+  "Fill every cell of T with a space.  Optional FACE applies to the
+filled cells (defaults to #f / no face)."
   (let ((chars (term-chars t))
         (faces (term-faces t))
         (n (* (term-width t) (term-height t))))
@@ -260,6 +290,7 @@
       (vector-set!    faces i face))))
 
 (define* (term-clear-row! t y #:optional (face #f))
+  "Fill row Y of T with spaces, optionally in FACE."
   (let* ((w (term-width t))
          (chars (term-chars t))
          (faces (term-faces t))
@@ -271,6 +302,7 @@
       (vector-set!    faces i face))))
 
 (define (term-copy-row! t src-y dst-y)
+  "Copy row SRC-Y of T over row DST-Y in place."
   (let* ((w (term-width t))
          (chars (term-chars t))
          (faces (term-faces t))
@@ -296,6 +328,9 @@
       (vector-set!    df i (vector-ref    sf i)))))
 
 (define (term-reset! t)
+  "Reset T to its initial state: parser cleared, cursor home, scroll
+region whole screen, modes back to defaults, charset slots back to
+us-ascii, attrs cleared, grid cleared, alt-screen exited."
   (set-term-parser-state! t #f)
   (set-term-csi-params! t '())
   (set-term-csi-format! t #f)
@@ -327,6 +362,9 @@
 (define (copy-region! src-chars src-faces src-w
                       dst-chars dst-faces dst-w
                       copy-w copy-h)
+  "Copy a COPY-W × COPY-H region from the top-left of one grid
+buffer pair into another.  SRC-W and DST-W are the row strides of
+the source and destination grids respectively."
   (do ((y 0 (+ y 1)))
       ((= y copy-h))
     (do ((x 0 (+ x 1)))
@@ -337,6 +375,11 @@
         (vector-set!    dst-faces di (vector-ref    src-faces si))))))
 
 (define (term-resize! t cols rows)
+  "Resize T to COLS × ROWS, preserving the top-left COPY-W × COPY-H
+slice of the visible grid (and the alt-screen backup, if any).
+Resets the scroll region to the full new height and clamps the
+cursor into the new bounds.  No-op if dimensions are unchanged or
+non-positive."
   (when (and (positive? cols) (positive? rows)
              (or (not (= cols (term-width t)))
                  (not (= rows (term-height t)))))

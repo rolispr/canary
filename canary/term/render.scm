@@ -13,6 +13,8 @@
             term-diff->ansi))
 
 (define (printable ch)
+  "Return CH if it's a printable character, otherwise space.
+Control chars (< 32) and DEL (127) collapse to space."
   (let ((code (char->integer ch)))
     (cond
      ((< code 32) #\space)
@@ -20,6 +22,9 @@
      (else ch))))
 
 (define (face->plist face)
+  "Return FACE as a property list suitable for inspection or
+serialisation, or #f if FACE is #f.  Inverse and conceal are
+applied by swapping fg/bg in the result."
   (and face
        (let ((p '()))
          (when (face-bold? face)    (set! p (cons* 'bold #t p)))
@@ -39,6 +44,9 @@
          p)))
 
 (define (term-render-line term y . maybe-buf)
+  "Render row Y of TERM.  Returns two values: a string of width
+chars (reusing MAYBE-BUF when it's a correctly-sized string) and
+a list of (COLUMN FACE-PLIST) entries marking each face change."
   (let* ((w (term-width term))
          (chars (if (and (pair? maybe-buf)
                          (string? (car maybe-buf))
@@ -60,6 +68,9 @@
     (values chars (reverse changes))))
 
 (define (term-render-region term origin)
+  "Render the visible grid of TERM as a list of cmd-style entries
+('text COL ROW SEGMENT FACE-PLIST) plus an optional final 'cursor
+entry, with positions offset by ORIGIN (a (COL ROW) list)."
   (let ((col0 (car origin))
         (row0 (cadr origin))
         (h (term-height term))
@@ -96,6 +107,8 @@
     (reverse cmds)))
 
 (define (cursor-style->draw style)
+  "Collapse a (possibly blinking) cursor style symbol to its
+non-blinking equivalent for the draw layer."
   (case style
     ((block blinking-block) 'block)
     ((underline blinking-underline) 'underline)
@@ -103,9 +116,9 @@
     (else 'block)))
 
 (define (term-dump-row term y)
-  ;; Build the row as a string omitting sentinel cells — what the
-  ;; terminal would visibly render (a wide char appears once, occupying
-  ;; two columns of the resulting string when displayed).
+  "Return row Y of TERM as a visible string: sentinel cells (the
+right half of a wide character) are omitted so each wide char
+appears once and occupies its natural two display columns."
   (let ((w (term-width term))
         (out (open-output-string)))
     (do ((x 0 (+ x 1)))
@@ -115,6 +128,8 @@
           (display ch out))))))
 
 (define (term-dump term)
+  "Return the visible grid of TERM as a single string with rows
+separated by newlines."
   (let ((h (term-height term))
         (out (open-output-string)))
     (do ((y 0 (+ y 1)))
@@ -125,6 +140,9 @@
     (get-output-string out)))
 
 (define (face->ansi-codes face)
+  "Return the SGR numeric codes for FACE as a list of strings.
+Starts with \"0\" (reset) so the output is self-contained.  Returns
+'(\"0\") for a #f face."
   (cond
    ((not face) '("0"))
    (else
@@ -143,6 +161,10 @@
       (reverse codes)))))
 
 (define (color-code color base)
+  "Return the SGR code string for COLOR relative to BASE (38 for
+fg, 48 for bg).  Maps 0-7 to the basic 8 colours, 8-15 to bright
+8, 16-255 to indexed-256 (`5;N`), and (R G B) lists to true-colour
+(`2;R;G;B`)."
   (cond
    ((and (integer? color) (>= color 0) (<= color 7))
     (number->string (+ (- base 8) color)))
@@ -159,6 +181,7 @@
    (else (number->string (+ base 1)))))
 
 (define (emit-sgr-string face)
+  "Return the ESC[…m SGR sequence representing FACE."
   (string-append (string #\esc) "["
                  (let join ((codes (face->ansi-codes face)))
                    (cond
@@ -169,6 +192,9 @@
                  "m"))
 
 (define (term-render-ansi-line term y)
+  "Return row Y of TERM as a self-contained ANSI string: SGR
+sequences emitted at each face change, sentinel cells skipped,
+trailing ESC[0m reset."
   (let* ((w (term-width term))
          (out (open-output-string))
          (prev-face #f)
@@ -187,17 +213,22 @@
     (get-output-string out)))
 
 (define (move-to-ansi col row)
+  "Return the ESC[r;cH cursor-positioning sequence for 0-indexed
+(COL, ROW)."
   (string-append (string #\esc) "["
                  (number->string (+ row 1)) ";"
                  (number->string (+ col 1)) "H"))
 
 (define (diff-cell! cur-chars cur-faces prev-chars prev-faces i x y out state)
-  ;; state is a vector: #(cursor-x cursor-y last-face any-emitted?)
+  "Emit the ANSI fragment needed to bring cell (X, Y) at flat index
+I from PREV to CUR.  STATE is a 4-element vector
+#(cursor-x cursor-y last-face any-emitted?) carrying outgoing
+emitter state across calls.  Sentinel cells emit nothing; equal
+cells emit nothing; differing cells emit a cursor move (if not
+already there), an SGR change (if the face differs), and the char."
   (let ((cur-ch (u32vector-ref cur-chars i))
         (cur-fa (vector-ref cur-faces i)))
     (cond
-     ;; sentinel: the wide char one cell to the left already painted
-     ;; this visual column. Don't emit, don't move the cursor.
      ((wide-cont? cur-ch) #f)
      (else
       (let ((same?
@@ -221,6 +252,9 @@
             (vector-set! state 3 #t))))))))
 
 (define (term-diff->ansi prev cur)
+  "Return an ANSI string that transforms a terminal displaying PREV
+into one displaying CUR.  When PREV is #f or differs in size, the
+output is a full repaint (every cell emitted)."
   (let* ((w (term-width cur))
          (h (term-height cur))
          (cur-chars (term-chars cur))

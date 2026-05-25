@@ -85,4 +85,34 @@
   (test-equal "shrink: first keeps height (row 0)" 0 (text-row (car cmds)))
   (test-equal "shrink: second pushed to row 6" 6 (text-row (cadr cmds))))
 
+;; ── align 2D positioning ─────────────────────────────────────────────
+
+;; Centered both axes within 11x11: 1x1 content, slack 10/10, offset 5/5.
+(let ((cmds (render (align (txt "x") #:h 'center #:v 'middle) 11 11)))
+  (test-equal "align center/middle: col 5" 5 (text-col (car cmds)))
+  (test-equal "align center/middle: row 5" 5 (text-row (car cmds))))
+
+;; Right + bottom: 1x1 in 10x10, offsets (9, 9).
+(let ((cmds (render (align (txt "x") #:h 'right #:v 'bottom) 10 10)))
+  (test-equal "align right/bottom: col 9" 9 (text-col (car cmds)))
+  (test-equal "align right/bottom: row 9" 9 (text-row (car cmds))))
+
+;; Default: left/top (no movement).
+(let ((cmds (render (align (txt "x")) 10 10)))
+  (test-equal "align default: col 0" 0 (text-col (car cmds)))
+  (test-equal "align default: row 0" 0 (text-row (car cmds))))
+
+;; Overflow on vertical with 'bottom: content (5 rows) in rect h=3.
+;; slack-h = -2 → sub-rect row = -2; first three lines render at rows
+;; -2, -1, 0 (clipped) … 0, 1, 2 (visible). The text-cmd whose row
+;; falls inside the rect is the last one.
+(let* ((items (list (txt "a") (txt "b") (txt "c") (txt "d") (txt "e")))
+       (cmds  (render (align (apply vbox items) #:v 'bottom) 10 3))
+       (visible (filter (lambda (c) (and (>= (text-row c) 0)
+                                          (<  (text-row c) 3)))
+                        cmds)))
+  (test-equal "align bottom-overflow: 3 rows visible" 3 (length visible))
+  (test-equal "align bottom-overflow: last visible is 'e'" "e"
+              (text-str (caddr visible))))
+
 (test-end "render")

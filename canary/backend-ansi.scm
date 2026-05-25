@@ -235,7 +235,7 @@ slots. Unchanged slots: zero bytes."
   (let* ((port (ansi-backend-port b))
          (old  (ansi-backend-placements b))
          (new  (make-hash-table)))
-    ;; build the new map; img-id resolved here so unregistered srcs drop out
+    ;; Resolve img-ids first so unregistered srcs drop out before the diff.
     (for-each
      (lambda (c)
        (let* ((src    (image-src c))
@@ -248,7 +248,6 @@ slots. Unchanged slots: zero bytes."
                               (image-w   c)   (image-h   c)
                               (image-px  c)   (image-py  c))))))
      cmds)
-    ;; deletes
     (hash-for-each
      (lambda (key old-vec)
        (unless (hash-ref new key)
@@ -258,16 +257,13 @@ slots. Unchanged slots: zero bytes."
          (set! (ansi-backend-placements-deleted b)
                (+ (ansi-backend-placements-deleted b) 1))))
      old)
-    ;; places / no-ops
     (hash-for-each
      (lambda (key new-vec)
        (let ((old-vec (hash-ref old key)))
          (cond
           ((and old-vec (placement-content-eq? old-vec new-vec))
-           ;; carry forward placement-id, no emit
            (vector-set! new-vec 0 (vector-ref old-vec 0)))
           (else
-           ;; new or changed
            (when (and old-vec
                       (not (= (vector-ref old-vec 1) (vector-ref new-vec 1))))
              (emit-image-delete-placement! port
@@ -587,7 +583,11 @@ counting m-terminated and H-terminated sequences respectively."
 allocate as needed. On resize, also clears the physical terminal so
 diff-emitted cells overwrite a known blank state — without this the
 old frame's bytes at coordinates the new frame doesn't paint remain
-on screen as ghosts."
+on screen as ghosts.
+
+`prev` may be #f independently of `cur`: process-one's resize branch
+nulls it to force a full repaint, so we have to handle the case where
+cur exists at the wrong size and prev needs (re)allocation."
   (let ((cur  (ansi-backend-cur-term b))
         (prev (ansi-backend-prev-term b)))
     (cond
@@ -600,8 +600,15 @@ on screen as ghosts."
         (display "\x1b[2J\x1b[H" out)
         (force-output out))
       (t:term-resize! cur w h)
-      (t:term-resize! prev w h)
-      (t:term-clear! prev)))))
+      (cond
+       (prev (t:term-resize! prev w h) (t:term-clear! prev))
+       (else (set! (ansi-backend-prev-term b)
+                   (t:make-term #:width w #:height h)))))
+     ((not prev)
+      ;; cur was already at the right size but prev got nulled (e.g.
+      ;; by a no-op-sized resize msg) — give it a fresh blank term.
+      (set! (ansi-backend-prev-term b)
+            (t:make-term #:width w #:height h))))))
 
 (define-method (backend-draw (b <ansi-backend>) cmds)
   "Render frame CMDS on backend B: partition graphics vs grid cmds,
@@ -640,8 +647,6 @@ the next frame diffs against this one."
                       (+ (ansi-backend-sgr-transitions b) sgr))
                 (set! (ansi-backend-cursor-moves b)
                       (+ (ansi-backend-cursor-moves b) cur-moves)))))))
-      ;; swap cur and prev: this frame's cur becomes next frame's prev,
-      ;; last frame's prev gets recycled as next frame's cur.
       (set! (ansi-backend-cur-term  b) prev)
       (set! (ansi-backend-prev-term b) cur)
       (unless (and (= (size-width cur-sz) w) (= (size-height cur-sz) h))

@@ -96,7 +96,7 @@
           (txt e    #:fg face #:bold sel?)
           (when dir? (txt "/" #:fg 'muted)))))
 
-(define-method (view (d <dired>) sz)
+(define-method (view (d <dired>))
   (let* ((es (dired-entries d))
          (items (map (lambda (e i) (entry-line d i e))
                      es
@@ -115,11 +115,11 @@
     (hbox (flex left  #:grow 1)
           (flex right #:grow 2))))
 
-(define-method (update (d <dired>) (msg <init>) sz)
+(define-method (update (d <dired>) (msg <init>))
   (cd! d (dired-path d))
   (values d #f))
 
-(define-method (update (d <dired>) (msg <key>) sz)
+(define-method (update (d <dired>) (msg <key>))
   (let ((k (key-sym msg)))
     (cond
      ((or (eqv? k #\j) (eq? k 'down))

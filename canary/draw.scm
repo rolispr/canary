@@ -113,8 +113,13 @@
   (right-action clickable-right-action))
 
 (define* (make-clickable col row w h action #:optional (right-action #f))
+  "Return a fresh <clickable-cmd> covering the W×H rect at (COL, ROW).
+ACTION fires on a primary (left) click; the optional RIGHT-ACTION
+fires on right-click, defaulting to #f (no right-click handler)."
   (%make-clickable col row w h action right-action))
 
 (define (cmd? x)
+  "Return #t if X is any draw cmd record (text, fill, cursor, clear,
+image, or clickable)."
   (or (text-cmd? x) (fill-cmd? x) (cursor-cmd? x) (clear-cmd? x)
       (image-cmd? x) (clickable-cmd? x)))

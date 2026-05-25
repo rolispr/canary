@@ -10,7 +10,10 @@
             view->cmds
             image-cmd->fallback-cmds))
 
-(define (clamp s max-w) (string-display-clamp s max-w))
+(define (clamp s max-w)
+  "Truncate string S to at most MAX-W display columns (wide chars
+counted correctly)."
+  (string-display-clamp s max-w))
 
 (define (wrap-paragraph str width)
   "Greedy word-wrap STR to WIDTH columns. Returns a list of line
@@ -51,6 +54,9 @@ flat list of line strings."
               (string-split str #\newline))))
 
 (define (render-wrap node rect)
+  "Word-wrap a <wrap-node> NODE into RECT.  Wraps the node's string
+to RECT's width, clips vertically to RECT's height, and emits one
+text cmd per visible line."
   (let* ((w (rect-w rect))
          (h (rect-h rect))
          (face (wrap-node-face node))
@@ -68,15 +74,24 @@ flat list of line strings."
             (cons (make-text (rect-col rect) row (car ls) face attrs) acc)))))))
 
 (define (rect-contains? rect x y)
+  "Return #t if cell (X, Y) lies inside RECT (half-open on the
+right and bottom edges)."
   (and (<= (rect-col rect) x)
        (< x (+ (rect-col rect) (rect-w rect)))
        (<= (rect-row rect) y)
        (< y (+ (rect-row rect) (rect-h rect)))))
 
 (define* (render node cols rows #:key (mouse-x -1) (mouse-y -1))
+  "Render NODE at the full COLS×ROWS screen and return a flat draw
+cmd list.  MOUSE-X / MOUSE-Y position the mouse for hit-testing
+hover and click nodes; pass -1 for no pointer."
   (view->cmds node (make-rect 0 0 cols rows) mouse-x mouse-y))
 
 (define (view->cmds node rect mx my)
+  "Render NODE into RECT, with mouse position (MX, MY) used for
+hover/click hit-testing.  Returns a flat list of draw cmds.  The
+main recursion: dispatches on node kind, slices RECT for children,
+and threads MX/MY through."
   (cond
    ((rect-empty? rect) '())
    ((not node) '())
@@ -157,31 +172,34 @@ flat list of line strings."
    ((wrap-node? node)
     (render-wrap node rect))
    ((is-a? node <object>)
-    (view->cmds (memoized-view node (size (rect-w rect) (rect-h rect)))
-                rect mx my))
+    (view->cmds (memoized-view node) rect mx my))
    (else '())))
 
 (define (image-cmd->fallback-cmds cmd)
+  "Render the fallback view of image CMD as draw cmds at CMD's
+rect.  Used by backends without graphics support."
   (view->cmds (image-fallback cmd)
               (make-rect (image-col cmd) (image-row cmd)
                          (image-w cmd) (image-h cmd))
               -1 -1))
 
 (define (bg-fill-cmds face rect)
+  "Return a one-element list with a fill cmd painting RECT in FACE,
+or empty if FACE is #f.  Used to apply container background colours."
   (if face
       (list (make-fill (rect-col rect) (rect-row rect)
                        (rect-w rect) (rect-h rect)
                        face))
       '()))
 
-;; Major-axis size of one box item before flex distribution. Descends
-;; through wrapper nodes (boxed, pad, margin, align, width, height,
-;; static, click, hover, flex) so the GOOPS instance buried inside is
-;; materialized at the right probe size and measured properly. Without
-;; this, view-size on (boxed goops) sees the goops's hard-coded (0,0)
-;; intrinsic and reports just the border overhead (2,2).
 (define (probe-major item probe-w probe-h axis)
-  ;; axis 'v → return height; 'h → return width
+  "Return the major-axis size (in cells) of one box ITEM before
+flex distribution.  AXIS is 'v (return height) or 'h (return width).
+Descends through wrapper nodes (flex, boxed, pad, margin, width,
+height, align, static, click, hover) so the GOOPS instance buried
+inside is materialised at the right probe size and measured
+properly.  Without this, view-size on (boxed goops) would see the
+goops's (0,0) intrinsic and report just the border overhead."
   (let ((major (lambda (s) (if (eq? axis 'v) (cdr s) (car s)))))
     (cond
      ((flex-node? item)
@@ -234,22 +252,20 @@ flat list of line strings."
       ;; the probe-size tree must not leak into the render cache, or the
       ;; subsequent real render call (at the actual rect size) hits the
       ;; cached probe tree and renders at probe size instead.
-      (let ((pw (if (eq? axis 'h) 1 probe-w))
-            (ph (if (eq? axis 'v) 1 probe-h)))
-        (major (view-size (view item (size pw ph))))))
+      (major (view-size (view item))))
      (else (major (view-size item))))))
 
 (define (flex-info item)
+  "Return (GROW . SHRINK) for ITEM, treating non-flex items as
+0/0."
   (cond
    ((flex-node? item) (cons (flex-node-grow item) (flex-node-shrink item)))
    (else (cons 0 0))))
 
-;; Walk the items list once. Return three parallel lists:
-;;  - intrinsic majors (cells)
-;;  - grow shares
-;;  - shrink shares
-;; Plus totals.
 (define (measure-box items rect axis)
+  "Walk ITEMS once measuring along AXIS.  Return six values: a list
+of intrinsic major sizes, a list of grow shares, a list of shrink
+shares, and the totals (sum-major, sum-grow, sum-shrink)."
   (let lp ((cs items) (majors '()) (grows '()) (shrinks '())
            (sum-major 0) (sum-grow 0) (sum-shrink 0))
     (cond
@@ -267,10 +283,11 @@ flat list of line strings."
         (lp (cdr cs) (cons m majors) (cons g grows) (cons s shrinks)
             (+ sum-major m) (+ sum-grow g) (+ sum-shrink s)))))))
 
-;; Distribute SURPLUS (≥0) across the items by their grow shares.
-;; Remainder cells from integer rounding go to the last flex item so
-;; the box exactly fills. Returns a list of bonuses parallel to GROWS.
 (define (distribute-bonuses majors grows surplus sum-grow)
+  "Distribute SURPLUS (≥0) cells across the items by their GROWS
+shares.  Remainder cells from integer rounding go to the last flex
+item so the box exactly fills.  Returns a list of bonus cell counts
+parallel to GROWS."
   (cond
    ((or (zero? surplus) (zero? sum-grow))
     (map (lambda (_) 0) grows))
@@ -282,7 +299,6 @@ flat list of line strings."
                  grows))
            (used  (apply + bonuses))
            (left  (- surplus used))
-           ;; tack the rounding remainder onto the last flex item
            (reversed
             (let loop ((bs (reverse bonuses)) (gs (reverse grows))
                        (remaining left) (acc '()))
@@ -294,9 +310,11 @@ flat list of line strings."
                (else (loop (cdr bs) (cdr gs) remaining (cons (car bs) acc)))))))
       reversed))))
 
-;; Distribute DEFICIT (≥0) across the items by their shrink shares.
-;; Items can't shrink below 0. Same rounding strategy as bonuses.
 (define (distribute-cuts majors shrinks deficit sum-shrink)
+  "Distribute DEFICIT (≥0) cells across the items by their SHRINKS
+shares.  Items can't shrink below 0; same rounding strategy as
+`distribute-bonuses`.  Returns a list of cut cell counts parallel
+to SHRINKS."
   (cond
    ((or (zero? deficit) (zero? sum-shrink))
     (map (lambda (_) 0) shrinks))
@@ -313,6 +331,9 @@ flat list of line strings."
                  (- sum s) (- left cut)))))))))
 
 (define (assigned-majors majors grows shrinks total-major available sum-grow sum-shrink)
+  "Combine intrinsic MAJORS with flex GROWS / SHRINKS so the sum
+matches AVAILABLE cells.  Grows distribute surplus; shrinks
+distribute deficit; equal-size case is identity."
   (cond
    ((< total-major available)
     (let ((bonuses (distribute-bonuses majors grows
@@ -324,35 +345,40 @@ flat list of line strings."
       (map - majors cuts)))
    (else majors)))
 
-;; Minor-axis size of one item. Mirrors probe-major's GOOPS handling
-;; so a tall GOOPS item in an hbox reports its natural width.
 (define (probe-minor item probe-w probe-h axis)
+  "Return the minor-axis size (in cells) of one box ITEM.  AXIS is
+'v (vbox; minor is width) or 'h (hbox; minor is height).  Mirrors
+probe-major's GOOPS handling so a tall GOOPS item in an hbox
+reports its natural width."
   (cond
    ((flex-node? item)
     (probe-minor (flex-node-body item) probe-w probe-h axis))
    (else
     (let ((s (cond
-              ((is-a? item <object>)
-               ;; Same anti-cache-pollution rationale as probe-major.
-               (view-size (view item (size probe-w probe-h))))
+              ((is-a? item <object>) (view-size (view item)))
               (else (view-size item)))))
       (if (eq? axis 'v) (car s) (cdr s))))))
 
-;; Cross-axis sizing policy:
-;; Only a (flex …) wrapper fills the cross axis. Every other node —
-;; including bare GOOPS instances and layout containers like boxed —
-;; sizes to its content. Authors who want a box to span the full
-;; available width wrap it in flex: (flex (boxed widget)) fills both
-;; the major (grow) and cross axes.
 (define (fills-cross-axis? item)
+  "Return #t if ITEM should fill the box's cross axis.  Only `flex`
+wrappers do; everything else (including bare GOOPS instances and
+layout containers like `boxed`) sizes to content.  To make a box
+span the full cross axis, wrap it: `(flex (boxed widget))`."
   (flex-node? item))
 
 (define (cross-size-for item pw ph full-cross axis)
+  "Return the cross-axis cell count to grant ITEM in a box.  ITEMs
+that fill the cross axis get FULL-CROSS; others get min of their
+intrinsic minor size (probed with PW/PH along AXIS) and FULL-CROSS."
   (cond
    ((fills-cross-axis? item) full-cross)
    (else (min (probe-minor item pw ph axis) full-cross))))
 
 (define (render-vbox node rect mx my)
+  "Render a <vbox-node> into RECT: probe each child's intrinsic
+height, distribute surplus/deficit through flex grow/shrink, then
+render each child into its row slice with width per cross-axis
+policy."
   (let ((face (vbox-node-face node))
         (items (vbox-node-children node)))
     (call-with-values (lambda () (measure-box items rect 'v))
@@ -377,6 +403,10 @@ flat list of line strings."
                        (append (reverse cmds) acc))))))))))))
 
 (define (render-hbox node rect mx my)
+  "Render an <hbox-node> into RECT: probe each child's intrinsic
+width, distribute surplus/deficit through flex grow/shrink, then
+render each child into its column slice with height per cross-axis
+policy."
   (let ((face (hbox-node-face node))
         (items (hbox-node-children node)))
     (call-with-values (lambda () (measure-box items rect 'h))
@@ -401,6 +431,10 @@ flat list of line strings."
                        (append (reverse cmds) acc))))))))))))
 
 (define (splice-title top-mid title)
+  "Overlay a TITLE string into TOP-MID (the run of top-border
+characters of a boxed node), padded with surrounding spaces.
+Returns TOP-MID unchanged when TITLE is #f, not a string, or
+doesn't fit."
   (cond
    ((not title) top-mid)
    ((not (string? title)) top-mid)
@@ -417,6 +451,10 @@ flat list of line strings."
                        (substring top-mid (+ offset tag-w) mid-w))))))))
 
 (define (render-boxed node rect mx my)
+  "Render a <boxed-node>: emit the four border glyphs, the top run
+with optional title spliced in, the side runs, the bottom run, and
+recurse into the child within the inner rect.  Returns the empty
+list if RECT is too small for the border (less than 2×2)."
   (cond
    ((or (< (rect-w rect) 2) (< (rect-h rect) 2)) '())
    (else
@@ -453,6 +491,9 @@ flat list of line strings."
        (view->cmds (boxed-node-child node) inner-rect mx my))))))
 
 (define (render-pad node rect mx my)
+  "Render a <pad-node>: paint the optional background face across
+RECT, then render the child into the shrunken inner rect derived
+from the pad amounts."
   (let* ((t (pad-node-top node))
          (r (pad-node-right node))
          (b (pad-node-bottom node))
@@ -465,6 +506,9 @@ flat list of line strings."
             (view->cmds (pad-node-child node) inner mx my))))
 
 (define (render-margin node rect mx my)
+  "Render a <margin-node>: render the child into the shrunken
+inner rect derived from the margin amounts.  Unlike pad, no
+background fill — margin cells are transparent."
   (let* ((t (margin-node-top    node))
          (r (margin-node-right  node))
          (b (margin-node-bottom node))
@@ -476,6 +520,9 @@ flat list of line strings."
     (view->cmds (margin-node-child node) inner mx my)))
 
 (define (render-text-runs node rect mx my)
+  "Render a <text-runs-node>: lay the runs left to right on RECT's
+top row, advancing the column by each run's intrinsic width and
+stopping when RECT's width is exhausted."
   (let loop ((runs (text-runs-node-runs node))
              (col  (rect-col rect))
              (acc  '())
@@ -491,23 +538,41 @@ flat list of line strings."
         (loop (cdr runs) (+ col w) (append (reverse cmds) acc) (- rem w)))))))
 
 (define (render-align node rect mx my)
-  (let* ((child (align-node-child node))
-         (mode (align-node-mode node))
-         (target-w (or (align-node-width node) (rect-w rect)))
-         (s (view-size child))
-         (cw (min (car s) target-w))
-         (slack (max 0 (- target-w cw)))
-         (offset (case mode
-                   ((center) (quotient slack 2))
-                   ((right) slack)
-                   (else 0)))
-         (sub (make-rect (+ (rect-col rect) offset)
-                         (rect-row rect)
+  "Render an <align-node>: position the child within an alignment
+slot of the rect, on both axes.  When the child overflows on an
+axis, the anchored edge ('right or 'bottom or the centered halves)
+stays inside the slot and the opposite edge clips off-rect — useful
+for chat-style tail anchoring and right-aligned status info."
+  (let* ((child  (align-node-child node))
+         (h-mode (align-node-h node))
+         (v-mode (align-node-v node))
+         (target-w (or (align-node-width  node) (rect-w rect)))
+         (target-h (or (align-node-height node) (rect-h rect)))
+         (s (if (is-a? child <object>)
+                (view-size (view child))
+                (view-size child)))
+         (cw (car s))
+         (ch (cdr s))
+         (slack-w (- target-w cw))    ; can be negative on overflow
+         (slack-h (- target-h ch))
+         (offset-x (case h-mode
+                     ((center) (quotient slack-w 2))
+                     ((right)  slack-w)
+                     (else     0)))
+         (offset-y (case v-mode
+                     ((middle) (quotient slack-h 2))
+                     ((bottom) slack-h)
+                     (else     0)))
+         (sub (make-rect (+ (rect-col rect) offset-x)
+                         (+ (rect-row rect) offset-y)
                          cw
-                         (rect-h rect))))
+                         ch)))
     (view->cmds child sub mx my)))
 
 (define (render-width node rect mx my)
+  "Render a <width-node>: render the child into a target-width
+slot (clamped to RECT's width) using the node's align mode for
+placement when the child is narrower."
   (let* ((target-w (min (width-node-w node) (rect-w rect)))
          (child (width-node-child node))
          (align (width-node-align node))
@@ -525,6 +590,9 @@ flat list of line strings."
     (view->cmds child sub mx my)))
 
 (define (render-height node rect mx my)
+  "Render a <height-node>: render the child into a target-height
+slot (clamped to RECT's height) using the node's valign mode for
+placement when the child is shorter."
   (let* ((target-h (min (height-node-h node) (rect-h rect)))
          (child (height-node-child node))
          (valign (height-node-valign node))
