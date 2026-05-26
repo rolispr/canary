@@ -36,7 +36,8 @@ Brings in:
   `cycle-palette`
 - Layout: `txt`, `vbox`, `hbox`, `spacer`, `pad`, `margin`, `align`,
   `width`, `height`, `fill`, `pin`, `overlay`, `boxed`, `static`,
-  `on-click`, `on-hover`, `flex`, `wrap`, `image`
+  `on-click`, `on-hover`, `link`, `prompt-zone`, `input-zone`,
+  `output-zone`, `flex`, `wrap`, `image`
 - Borders: `border-normal`, `border-rounded`, `border-thick`,
   `border-double`, `border-ascii`
 - Theme: `theme`, `palette`, `theme-set!`, `theme-cycle!`,
@@ -52,6 +53,10 @@ Components live in separate modules and are imported individually:
              (canary components textinput)
              (canary components spinner))
 ```
+
+The VT emulator core is also a public library; pull it in with
+`(use-modules (canary term))` when you want to parse, snapshot, or
+replay terminal byte streams directly.
 
 The sections below cover each piece.
 
@@ -425,12 +430,24 @@ Containers:
 (static body)                            ; cache rendered cmds keyed on rect
 (on-click action body)
 (on-hover body styler-proc)
+(link "https://..." body)                ; OSC 8 clickable hyperlink
+(prompt-zone body)                       ; OSC 133 ; A  - shell prompt
+(input-zone  body)                       ; OSC 133 ; B  - typed command
+(output-zone body)                       ; OSC 133 ; C  - command output
 (flex    body  #:grow 1 #:shrink 0)
 (wrap    "long text" #:fg 'name #:bold)   ; word-wraps to its rect's width
 ```
 
 `pad` and `margin` are distinct: `pad` adds space *inside* a
 boxed/styled region, `margin` adds space *outside*.
+
+`link` and the zone wrappers tag the cells emitted from their body
+with hyperlink-uri or semantic-content metadata.  The diff-to-ansi
+emitter wraps runs of matching cells in OSC 8 / OSC 133 sequences so
+the host terminal renders clickable links and shell-integration
+anchors (per-command navigation, "copy output only", per-command
+timing) on the subset of terminals that honour the protocols.
+Terminals that ignore them render the body unchanged.
 
 ### Align
 
@@ -540,6 +557,51 @@ user-facing constructor. Applies to engine plumbing (`(engine
 - **Don't** expand widgets via `(view (chat-input c))` in your own
   view; pass the widget itself, `(chat-input c)`. The cascade can't
   reach widgets it can't see by reference.
+
+## Backend, grid, parser
+
+Rendering routes through a cell grid.  The backend (`<ansi-backend>`)
+keeps two `<term>` records as private state: `cur-term` and
+`prev-term`.  Each frame:
+
+1. The engine asks the renderer for draw cmds against the current
+   widget tree.
+2. The backend replays those cmds into `cur-term`, mutating cells
+   one at a time (`render-cmds-to-term!`).
+3. `term-diff->ansi prev-term cur-term` emits the minimal ANSI byte
+   sequence that takes a host terminal displaying `prev-term` to
+   one displaying `cur-term`: cursor moves, SGR changes, OSC 8 / OSC
+   133 transitions, then the changed glyphs.
+4. The backend swaps the slots so the next frame diffs against this
+   one.
+
+`<term>` is therefore both the model the emulator parses into *and*
+the model canary's own rendering writes into.  Two doors into the
+same data structure:
+
+- write path: tree → draw cmds → cells, used every frame
+- parse path: bytes → `term-process-output!` → cells, used by tests,
+  snapshot tools, and any consumer that wants to feed a `<term>` an
+  external byte stream
+
+One door out: `term-diff->ansi` → host bytes.
+
+Cells carry codepoint, face attributes (fg, bg, bold, italic,
+underline style, underline colour, overline, blink, inverse,
+conceal, strike), hyperlink uri, and semantic-content tag.  Adding a
+new cell attribute means extending `<face-attrs>` once; both the
+write path and the parse path pick it up.
+
+The emulator pieces live in `(canary term ...)` and re-export
+together as `(canary term)`.  Useful entry points:
+
+- `make-term`, `term-process-output!`, `term-process-bytes!`
+- `view->grid` to render a view tree into a fresh `<term>`
+- `term->text-snapshot`, `term->ansi-snapshot` for golden-file tests
+- `replay-ansi` to parse a recorded byte stream
+- `mode-get` / `mode-set!` for the 38-mode VT state table
+- `update` specialised on `<op-set-mode>` / `<op-reset-mode>` (and
+  other op records) intercepts emulator decisions live from the REPL
 
 ## Terminal capabilities
 
