@@ -141,9 +141,12 @@ either a <face> record or #f for 'default."
 
 (define (apply-face-to-term-attrs! tattrs face extra-attrs th)
   "Mutate term attribute slot TATTRS in place to reflect FACE
-(resolved against theme TH) plus EXTRA-ATTRS.  Resets first so old
-attrs don't bleed into the new cell."
+(resolved against theme TH) plus EXTRA-ATTRS.  Resets the SGR slots
+first so old attrs don't bleed into the new cell; the hyperlink
+slot is taken from FACE directly."
   (t:reset-face-attrs! tattrs)
+  (t:set-face-hyperlink! tattrs (and face (face-hyperlink face)))
+  (t:set-face-semantic!  tattrs (and face (face-semantic face)))
   (when face
     (let ((fg (resolve-color (face-fg face) th))
           (bg (resolve-color (face-bg face) th)))
@@ -158,7 +161,8 @@ attrs don't bleed into the new cell."
          ((underline) (t:set-face-underline! tattrs 'single))
          ((blink) (t:set-face-blink! tattrs 'slow))
          ((reverse) (t:set-face-inverse! tattrs #t))
-         ((strikethrough) (t:set-face-crossed! tattrs #t))))
+         ((strikethrough) (t:set-face-crossed! tattrs #t))
+         ((overline) (t:set-face-overline! tattrs #t))))
      (append (or (face-attrs face) '()) (or extra-attrs '())))))
 
 (define (render-cmds-to-term! term cmds th)

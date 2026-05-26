@@ -2,23 +2,47 @@
   #:use-module (srfi srfi-9)
   #:export (<face>
             face face?
-            face-fg face-bg face-attrs
+            face-fg face-bg face-attrs face-hyperlink face-semantic
+            with-hyperlink with-semantic
             default-faces
             face-table-lookup
             extend-face-table
             faces))
 
 (define-record-type <face>
-  (%face fg bg attrs) face?
-  (fg    face-fg)
-  (bg    face-bg)
-  (attrs face-attrs))
+  (%face fg bg attrs hyperlink semantic) face?
+  (fg        face-fg)
+  (bg        face-bg)
+  (attrs     face-attrs)
+  (hyperlink face-hyperlink)
+  (semantic  face-semantic))
 
-(define* (face #:key fg bg (attrs '()))
-  "Return a fresh <face>.  FG and BG are color strings (e.g. \"#ff00aa\")
-or #f.  ATTRS is a list of attribute symbols like 'bold, 'italic,
-'underline."
-  (%face fg bg attrs))
+(define* (face #:key fg bg (attrs '()) (hyperlink #f) (semantic #f))
+  "Return a fresh <face>.  FG and BG are colour strings (e.g.
+\"#ff00aa\") or #f.  ATTRS is a list of attribute symbols like
+'bold, 'italic, 'underline.  HYPERLINK is a uri string (the cells
+this face decorates render as a clickable OSC 8 link in capable
+host terminals) or #f.  SEMANTIC is one of 'prompt / 'input /
+'output / 'unknown, tagging the cells for OSC 133 shell-integration
+consumers."
+  (%face fg bg attrs hyperlink semantic))
+
+(define (with-hyperlink f uri)
+  "Return a copy of <face> F with its hyperlink slot set to URI.
+F may also be #f, in which case a fresh default <face> is returned
+carrying just the hyperlink."
+  (cond
+   ((face? f) (%face (face-fg f) (face-bg f) (face-attrs f) uri (face-semantic f)))
+   (else (%face #f #f '() uri #f))))
+
+(define (with-semantic f kind)
+  "Return a copy of <face> F with its semantic slot set to KIND
+(one of 'prompt / 'input / 'output / 'unknown / #f).  F may also be
+#f, in which case a fresh default <face> is returned carrying just
+the semantic tag."
+  (cond
+   ((face? f) (%face (face-fg f) (face-bg f) (face-attrs f) (face-hyperlink f) kind))
+   (else (%face #f #f '() #f kind))))
 
 (define default-faces
   `((default     . ,(face))

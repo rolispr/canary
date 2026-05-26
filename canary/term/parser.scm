@@ -4,6 +4,7 @@
   #:use-module (canary term sgr)
   #:use-module (canary term write)
   #:use-module (canary term utf8)
+  #:use-module (canary term base64)
   #:use-module (canary term action)
   #:use-module (canary term dispatch)
   #:use-module (rnrs bytevectors)
@@ -173,6 +174,18 @@ byte is present."
       (set-term-parser-state! term 'csi-params)
       idx))))
 
+(define (extend-sub-param sub digit)
+  "Append DIGIT to the last numeric slot of sub-parameter list SUB.
+SUB is a list whose tail element is either #f (a fresh slot ready
+for digits) or a number being extended.  Mutates nothing; returns
+a fresh list."
+  (let loop ((xs sub) (acc '()))
+    (cond
+     ((null? (cdr xs))
+      (reverse (cons (+ (* (or (car xs) 0) 10) digit) acc)))
+     (else
+      (loop (cdr xs) (cons (car xs) acc))))))
+
 (define (handle-csi-params term str idx len)
   "Accumulate CSI parameter bytes (digits, ';' separators, ':'
 sub-separators) into TERM's csi-params slot.  On ':' the head
@@ -186,7 +199,11 @@ encountering a non-param byte."
              (params (term-csi-params term))
              (head (car params))
              (rest (cdr params))
-             (new-head (+ (* (or head 0) 10) digit)))
+             (new-head (cond
+                        ((pair? head)
+                         (extend-sub-param head digit))
+                        (else
+                         (+ (* (or head 0) 10) digit)))))
         (set-term-csi-params! term (cons new-head rest))
         (+ idx 1)))
      ((char=? ch #\;)
@@ -250,18 +267,65 @@ two-byte form."
      (else (scan (+ i 1))))))
 
 (define (handle-dcs term str idx len)
-  "Skip a DCS (Device Control String) payload up to and including
-its ESC\\ ST terminator.  The contents are discarded; canary
-doesn't honour any DCS sequences yet."
+  "Accumulate a DCS (Device Control String) payload into TERM's
+dcs-buf until the ESC\\ ST terminator, then dispatch.  Currently
+handles DECRQSS ($q...) and discards every other DCS."
   (let scan ((i idx))
     (cond
-     ((>= i len) len)
+     ((>= i len)
+      (set-term-dcs-buf! term
+                         (string-append (term-dcs-buf term)
+                                        (substring str idx i)))
+      i)
      ((and (char=? (string-ref str i) #\esc)
            (< (+ i 1) len)
            (char=? (string-ref str (+ i 1)) #\\))
+      (set-term-dcs-buf! term
+                         (string-append (term-dcs-buf term)
+                                        (substring str idx i)))
+      (dispatch-dcs term (term-dcs-buf term))
       (set-term-parser-state! term #f)
+      (set-term-dcs-buf! term "")
       (+ i 2))
      (else (scan (+ i 1))))))
+
+(define (dispatch-dcs term payload)
+  "Dispatch a complete DCS PAYLOAD (without ESC P introducer or ESC\\
+terminator).  $q...  is DECRQSS -- the host asks for the current
+value of a setting; reply via TERM's input-fn."
+  (cond
+   ((and (>= (string-length payload) 2)
+         (string=? (substring payload 0 2) "$q"))
+    (dispatch-decrqss term (substring payload 2)))))
+
+(define (dispatch-decrqss term arg)
+  "Reply to a DECRQSS query ARG (one of \"r\" = DECSTBM, \"q\" =
+DECSCUSR, \"\\\"q\" = DECSCA) via TERM's input-fn.  Format:
+ESC P 1$r <body> ESC \\ on success."
+  (let ((fn (term-input-fn term)))
+    (when fn
+      (let ((body
+             (cond
+              ((string=? arg "r")
+               (string-append (number->string (+ 1 (term-scroll-top term)))
+                              ";"
+                              (number->string (+ 1 (term-scroll-bottom term)))
+                              "r"))
+              ((string=? arg " q")
+               (let ((n (case (term-cursor-style term)
+                          ((blinking-block)     1)
+                          ((block)              2)
+                          ((blinking-underline) 3)
+                          ((underline)          4)
+                          ((blinking-bar)       5)
+                          ((bar)                6)
+                          (else                 2))))
+                 (string-append (number->string n) " q")))
+              (else #f))))
+        (when body
+          (fn term
+              (string-append (string #\esc) "P1$r" body
+                             (string #\esc) "\\")))))))
 
 (define (dispatch-csi term ch fmt params)
   "Dispatch a CSI ending in final byte CH with private FMT byte
@@ -366,7 +430,8 @@ mapped to the blink/steady block/underline/bar variants)."
 (define (dispatch-osc term s)
   "Dispatch an OSC payload S (already stripped of introducer and
 terminator) by its leading numeric code: 0/2 set the window title,
-7 sets the cwd, 10/11 reply to fg/bg colour queries."
+7 sets the cwd, 8 opens or closes a hyperlink, 10/11 reply to fg/bg
+colour queries."
   (let ((semi (string-index s #\;)))
     (when semi
       (let ((code (substring s 0 semi))
@@ -378,16 +443,72 @@ terminator) by its leading numeric code: 0/2 set the window title,
          ((string=? code "7")
           (set-term-cwd! term data)
           (when (term-cwd-fn term) ((term-cwd-fn term) term data)))
+         ((string=? code "8")
+          (dispatch-hyperlink! term data))
+         ((string=? code "52")
+          (dispatch-clipboard! term data))
+         ((string=? code "133")
+          (dispatch-semantic! term data))
+         ((or (string=? code "9") (string=? code "777"))
+          (let ((fn (term-notification-fn term)))
+            (when fn (fn term data))))
+         ((string=? code "22")
+          (let ((fn (term-mouse-shape-fn term)))
+            (when fn (fn term data))))
          ((string=? code "10")
           (when (and (string=? data "?") (term-input-fn term))
-            ((term-input-fn term) t
+            ((term-input-fn term) term
              (string-append (string #\esc) "]10;rgb:d8d8/d8d8/d8d8"
                             (string #\esc) "\\"))))
          ((string=? code "11")
           (when (and (string=? data "?") (term-input-fn term))
-            ((term-input-fn term) t
+            ((term-input-fn term) term
              (string-append (string #\esc) "]11;rgb:1818/1818/1818"
                             (string #\esc) "\\")))))))))
+
+(define (dispatch-hyperlink! term data)
+  "Handle the body of an OSC 8 sequence: DATA has the form
+\"PARAMS;URI\" (PARAMS is currently ignored).  An empty URI closes
+any open hyperlink; a non-empty URI becomes the active hyperlink
+that subsequent cell writes carry on their face."
+  (let* ((semi (string-index data #\;))
+         (uri  (and semi (substring data (+ semi 1)))))
+    (set-face-hyperlink! (term-attrs term)
+                         (and uri (positive? (string-length uri)) uri))))
+
+(define (dispatch-clipboard! term data)
+  "Handle the body of an OSC 52 sequence.  DATA has the form
+\"SELECTIONS;PAYLOAD\" where SELECTIONS is a string of selection
+chars ('c' clipboard, 'p' primary, ...) and PAYLOAD is either '?'
+(query) or a base64-encoded text.  Dispatches via TERM's clipboard-fn
+callback as (clipboard-fn TERM SELECTIONS 'set DECODED) on a set,
+or (clipboard-fn TERM SELECTIONS 'get #f) on a query."
+  (let* ((semi (string-index data #\;))
+         (sel  (if semi (substring data 0 semi) ""))
+         (payload (and semi (substring data (+ semi 1))))
+         (fn (term-clipboard-fn term)))
+    (when (and fn payload)
+      (cond
+       ((string=? payload "?")
+        (fn term sel 'get #f))
+       (else
+        (fn term sel 'set (base64->string payload)))))))
+
+(define (dispatch-semantic! term data)
+  "Handle the body of an OSC 133 (semantic prompt) sequence.  DATA's
+leading character keys the zone subsequent cells live in:
+A = prompt, B = command input, C = command output, D = post-command
+(no zone).  Anything else is treated as 'unknown."
+  (let ((kind (cond
+               ((zero? (string-length data)) #f)
+               (else
+                (case (string-ref data 0)
+                  ((#\A) 'prompt)
+                  ((#\B) 'input)
+                  ((#\C) 'output)
+                  ((#\D) #f)
+                  (else  'unknown))))))
+    (set-face-semantic! (term-attrs term) kind)))
 
 (define (string-index s ch)
   "Return the index of the first occurrence of CH in S, or #f."

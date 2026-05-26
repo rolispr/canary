@@ -29,28 +29,14 @@ and 39/49/59 (default colour).  Empty params reset all attrs."
         (when (< i len)
           (let ((code (or (next) 0)))
             (cond
+             ((pair? code) (handle-sub-param! code attrs))
              ((eq? code 0) (reset-face-attrs! attrs))
              ((eq? code 1) (set-face-bold! attrs #t)
                            (set-face-faint! attrs #f))
              ((eq? code 2) (set-face-faint! attrs #t)
                            (set-face-bold! attrs #f))
              ((eq? code 3) (set-face-italic! attrs #t))
-             ((eq? code 4)
-              (let ((sub (peek)))
-                (cond
-                 ((and (pair? sub) (pair? (cdr sub)))
-                  (next)
-                  (let ((s (cadr sub)))
-                    (case s
-                      ((0) (set-face-underline! attrs #f))
-                      ((1) (set-face-underline! attrs 'single))
-                      ((2) (set-face-underline! attrs 'double))
-                      ((3) (set-face-underline! attrs 'curly))
-                      ((4) (set-face-underline! attrs 'dotted))
-                      ((5) (set-face-underline! attrs 'dashed))
-                      (else (set-face-underline! attrs 'single)))))
-                 (else
-                  (set-face-underline! attrs 'single)))))
+             ((eq? code 4) (set-face-underline! attrs 'single))
              ((eq? code 5) (set-face-blink! attrs 'slow))
              ((eq? code 6) (set-face-blink! attrs 'fast))
              ((eq? code 7) (set-face-inverse! attrs #t))
@@ -67,6 +53,8 @@ and 39/49/59 (default colour).  Empty params reset all attrs."
              ((eq? code 29) (set-face-crossed! attrs #f))
              ((eq? code 39) (set-face-fg! attrs #f))
              ((eq? code 49) (set-face-bg! attrs #f))
+             ((eq? code 53) (set-face-overline! attrs #t))
+             ((eq? code 55) (set-face-overline! attrs #f))
              ((eq? code 59) (set-face-ul-color! attrs #f))
              ((and (>= code 30) (<= code 37))
               (set-face-fg! attrs (- code 30)))
@@ -81,6 +69,53 @@ and 39/49/59 (default colour).  Empty params reset all attrs."
              ((eq? code 58) (consume-extended-color! attrs 'ul next))
              (else #f)))
           (loop)))))))
+
+(define (handle-sub-param! sub attrs)
+  "Interpret a colon-separated SGR sub-parameter list SUB and apply it
+to ATTRS.  Handles underline style (4:n), and extended colour for fg
+(38:5:n / 38:2:r:g:b), bg (48:...), and underline (58:...)."
+  (case (car sub)
+    ((4)
+     (set-face-underline!
+      attrs
+      (case (and (pair? (cdr sub)) (cadr sub))
+        ((0)  #f)
+        ((1)  'single)
+        ((2)  'double)
+        ((3)  'curly)
+        ((4)  'dotted)
+        ((5)  'dashed)
+        (else 'single))))
+    ((38) (consume-sub-color! attrs sub 'fg))
+    ((48) (consume-sub-color! attrs sub 'bg))
+    ((58) (consume-sub-color! attrs sub 'ul))))
+
+(define (consume-sub-color! attrs sub slot)
+  "Apply colon-form extended colour SUB ('(KIND ...) where KIND is 5
+or 2) to ATTRS' SLOT ('fg / 'bg / 'ul)."
+  (let ((mode (and (pair? (cdr sub)) (cadr sub))))
+    (cond
+     ((eq? mode 5)
+      (let ((c (and (pair? (cddr sub)) (caddr sub))))
+        (when (and c (>= c 0) (<= c 255))
+          (case slot
+            ((fg) (set-face-fg! attrs c))
+            ((bg) (set-face-bg! attrs c))
+            ((ul) (set-face-ul-color! attrs c))))))
+     ((eq? mode 2)
+      (let* ((tail (cddr sub))
+             (r (and (pair? tail) (car tail)))
+             (g (and r (pair? (cdr tail)) (cadr tail)))
+             (b (and g (pair? (cddr tail)) (caddr tail))))
+        (when (and r g b
+                   (>= r 0) (<= r 255)
+                   (>= g 0) (<= g 255)
+                   (>= b 0) (<= b 255))
+          (let ((rgb (list r g b)))
+            (case slot
+              ((fg) (set-face-fg! attrs rgb))
+              ((bg) (set-face-bg! attrs rgb))
+              ((ul) (set-face-ul-color! attrs rgb))))))))))
 
 (define (consume-extended-color! attrs slot next)
   "Read an extended-colour spec from the SGR param iterator NEXT

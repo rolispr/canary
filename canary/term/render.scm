@@ -140,6 +140,17 @@ separated by newlines."
         (newline out)))
     (get-output-string out)))
 
+(define (underline-style-code style)
+  "Return the CSI 4:n m sub-parameter sub-code for a non-#f underline
+STYLE symbol, or the bare \"4\" code when STYLE is 'single or just #t."
+  (case style
+    ((single #t) "4")
+    ((double)    "4:2")
+    ((curly)     "4:3")
+    ((dotted)    "4:4")
+    ((dashed)    "4:5")
+    (else        "4")))
+
 (define (face->ansi-codes face)
   "Return the SGR numeric codes for FACE as a list of strings.
 Starts with \"0\" (reset) so the output is self-contained.  Returns
@@ -151,14 +162,19 @@ Starts with \"0\" (reset) so the output is self-contained.  Returns
       (when (face-bold? face)    (set! codes (cons "1" codes)))
       (when (face-faint? face)   (set! codes (cons "2" codes)))
       (when (face-italic? face)  (set! codes (cons "3" codes)))
-      (when (face-underline face) (set! codes (cons "4" codes)))
+      (when (face-underline face)
+        (set! codes (cons (underline-style-code (face-underline face))
+                          codes)))
       (when (face-inverse? face) (set! codes (cons "7" codes)))
       (when (face-crossed? face) (set! codes (cons "9" codes)))
+      (when (face-overline? face) (set! codes (cons "53" codes)))
       (let ((fg (if (face-inverse? face) (face-bg face) (face-fg face)))
-            (bg (if (face-inverse? face) (face-fg face) (face-bg face))))
+            (bg (if (face-inverse? face) (face-fg face) (face-bg face)))
+            (ul (face-ul-color face)))
         (when (face-conceal? face) (set! fg bg))
         (when fg (set! codes (cons (color-code fg 38) codes)))
-        (when bg (set! codes (cons (color-code bg 48) codes))))
+        (when bg (set! codes (cons (color-code bg 48) codes)))
+        (when ul (set! codes (cons (color-code ul 58) codes))))
       (reverse codes)))))
 
 (define (color-code color base)
@@ -220,13 +236,45 @@ trailing ESC[0m reset."
                  (number->string (+ row 1)) ";"
                  (number->string (+ col 1)) "H"))
 
+(define (face-hyperlink-of fa)
+  "Return the hyperlink uri carried by face-attrs FA, or #f if FA is
+#f or carries no hyperlink."
+  (and fa (face-hyperlink fa)))
+
+(define (face-semantic-of fa)
+  "Return the semantic-content tag carried by face-attrs FA, or #f if
+FA is #f or carries no tag."
+  (and fa (face-semantic fa)))
+
+(define (emit-osc-8 uri out)
+  "Display the OSC 8 ANSI sequence opening URI (or closing the
+current hyperlink when URI is #f) to OUT."
+  (display (string #\esc) out)
+  (display "]8;;" out)
+  (when uri (display uri out))
+  (display (string #\esc) out)
+  (display "\\" out))
+
+(define (emit-osc-133 kind out)
+  "Display the OSC 133 ANSI marker for KIND ('prompt / 'input /
+'output / 'unknown), or 'D' (post-command) when KIND is #f."
+  (display (string #\esc) out)
+  (display "]133;" out)
+  (display (case kind
+             ((prompt)  "A")
+             ((input)   "B")
+             ((output)  "C")
+             ((#f)      "D")
+             (else      "A"))
+           out)
+  (display (string #\esc) out)
+  (display "\\" out))
+
 (define (diff-cell! cur-chars cur-faces prev-chars prev-faces i x y out state)
   "Emit the ANSI fragment needed to bring cell (X, Y) at flat index
-I from PREV to CUR.  STATE is a 4-element vector
-#(cursor-x cursor-y last-face any-emitted?) carrying outgoing
-emitter state across calls.  Sentinel cells emit nothing; equal
-cells emit nothing; differing cells emit a cursor move (if not
-already there), an SGR change (if the face differs), and the char."
+I from PREV to CUR.  STATE is a 6-element vector
+#(cursor-x cursor-y last-face any-emitted? last-hyperlink last-semantic)
+carrying outgoing emitter state across calls."
   (let ((cur-ch (u32vector-ref cur-chars i))
         (cur-fa (vector-ref cur-faces i)))
     (cond
@@ -240,6 +288,10 @@ already there), an SGR change (if the face differs), and the char."
           (let ((cursor-x (vector-ref state 0))
                 (cursor-y (vector-ref state 1))
                 (last-face (vector-ref state 2))
+                (last-uri      (vector-ref state 4))
+                (last-semantic (vector-ref state 5))
+                (cur-uri      (face-hyperlink-of cur-fa))
+                (cur-semantic (face-semantic-of cur-fa))
                 (cw (char-display-width (integer->char cur-ch))))
             (unless (and (eqv? cursor-x x) (eqv? cursor-y y))
               (display (move-to-ansi x y) out)
@@ -248,6 +300,12 @@ already there), an SGR change (if the face differs), and the char."
             (unless (face-attrs-equal? cur-fa last-face)
               (display (emit-sgr-string cur-fa) out)
               (vector-set! state 2 cur-fa))
+            (unless (equal? cur-uri last-uri)
+              (emit-osc-8 cur-uri out)
+              (vector-set! state 4 cur-uri))
+            (unless (eq? cur-semantic last-semantic)
+              (emit-osc-133 cur-semantic out)
+              (vector-set! state 5 cur-semantic))
             (display (printable (integer->char cur-ch)) out)
             (vector-set! state 0 (+ x (max 1 cw)))
             (vector-set! state 3 #t))))))))
@@ -266,7 +324,7 @@ output is a full repaint (every cell emitted)."
          (prev-chars (if use-prev? (term-chars prev) #f))
          (prev-faces (if use-prev? (term-faces prev) #f))
          (out (open-output-string))
-         (state (vector #f #f #f #f)))
+         (state (vector #f #f #f #f #f #f)))
     (let loop-y ((y 0))
       (when (< y h)
         (let ((row-base (* y w)))
@@ -277,6 +335,8 @@ output is a full repaint (every cell emitted)."
               (loop-x (+ x 1)))))
         (loop-y (+ y 1))))
     (when (vector-ref state 3)
+      (when (vector-ref state 4)
+        (emit-osc-8 #f out))
       (display (string-append (string #\esc) "[0m") out))
     (when (mode-get (term-modes cur) 'cursor-visible)
       (display (move-to-ansi (term-cursor-x cur) (term-cursor-y cur)) out))

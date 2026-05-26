@@ -18,6 +18,9 @@
             face-inverse? set-face-inverse!
             face-conceal? set-face-conceal!
             face-crossed? set-face-crossed!
+            face-overline? set-face-overline!
+            face-hyperlink set-face-hyperlink!
+            face-semantic set-face-semantic!
             default-face-attrs
             copy-face-attrs
             face-attrs-equal?
@@ -46,6 +49,7 @@
             term-csi-params set-term-csi-params!
             term-csi-format set-term-csi-format!
             term-osc-buf set-term-osc-buf!
+            term-dcs-buf set-term-dcs-buf!
             term-modes
             term-cursor-style set-term-cursor-style!
             term-g0 set-term-g0!
@@ -60,6 +64,9 @@
             term-bell-fn set-term-bell-fn!
             term-title-fn set-term-title-fn!
             term-cwd-fn set-term-cwd-fn!
+            term-clipboard-fn set-term-clipboard-fn!
+            term-notification-fn set-term-notification-fn!
+            term-mouse-shape-fn set-term-mouse-shape-fn!
             term-title set-term-title!
             term-cwd set-term-cwd!
             term-last-char set-term-last-char!
@@ -80,7 +87,8 @@
 
 (define-record-type <face-attrs>
   (%make-face-attrs fg bg bold? faint? italic? underline ul-color
-                    blink inverse? conceal? crossed?)
+                    blink inverse? conceal? crossed? overline?
+                    hyperlink semantic)
   face-attrs?
   (fg          face-fg          set-face-fg!)
   (bg          face-bg          set-face-bg!)
@@ -92,28 +100,34 @@
   (blink       face-blink       set-face-blink!)
   (inverse?    face-inverse?    set-face-inverse!)
   (conceal?    face-conceal?    set-face-conceal!)
-  (crossed?    face-crossed?    set-face-crossed!))
+  (crossed?    face-crossed?    set-face-crossed!)
+  (overline?   face-overline?   set-face-overline!)
+  (hyperlink   face-hyperlink   set-face-hyperlink!)
+  (semantic    face-semantic    set-face-semantic!))
 
 (define* (make-face-attrs #:key (fg #f) (bg #f) (bold? #f) (faint? #f)
                           (italic? #f) (underline #f) (ul-color #f)
                           (blink #f) (inverse? #f) (conceal? #f)
-                          (crossed? #f))
+                          (crossed? #f) (overline? #f)
+                          (hyperlink #f) (semantic #f))
   "Return a fresh <face-attrs> with the given attribute slots.
 Each slot defaults to #f (unset)."
   (%make-face-attrs fg bg bold? faint? italic? underline ul-color
-                    blink inverse? conceal? crossed?))
+                    blink inverse? conceal? crossed? overline?
+                    hyperlink semantic))
 
 (define (default-face-attrs)
   "Return a fresh <face-attrs> with every slot unset.  Equivalent
 to `(make-face-attrs)` but skips the keyword parsing."
-  (%make-face-attrs #f #f #f #f #f #f #f #f #f #f #f))
+  (%make-face-attrs #f #f #f #f #f #f #f #f #f #f #f #f #f #f))
 
 (define (copy-face-attrs f)
   "Return a fresh <face-attrs> whose slots are copied from F."
   (%make-face-attrs (face-fg f) (face-bg f) (face-bold? f)
                     (face-faint? f) (face-italic? f) (face-underline f)
                     (face-ul-color f) (face-blink f) (face-inverse? f)
-                    (face-conceal? f) (face-crossed? f)))
+                    (face-conceal? f) (face-crossed? f) (face-overline? f)
+                    (face-hyperlink f) (face-semantic f)))
 
 (define (face-attrs-equal? a b)
   "Return #t if A and B carry the same attribute slot values.
@@ -132,10 +146,15 @@ Eq-identical, both-#f, and slot-wise equal all qualify."
          (equal? (face-blink a) (face-blink b))
          (eq? (face-inverse? a) (face-inverse? b))
          (eq? (face-conceal? a) (face-conceal? b))
-         (eq? (face-crossed? a) (face-crossed? b))))))
+         (eq? (face-crossed? a) (face-crossed? b))
+         (eq? (face-overline? a) (face-overline? b))
+         (equal? (face-hyperlink a) (face-hyperlink b))
+         (eq? (face-semantic a) (face-semantic b))))))
 
 (define (reset-face-attrs! f)
-  "Clear every slot of <face-attrs> F to its unset state in place."
+  "Clear every SGR attribute slot of <face-attrs> F in place.  The
+hyperlink slot is left untouched because OSC 8 is out-of-band from
+SGR and survives a CSI 0 m reset."
   (set-face-fg! f #f)
   (set-face-bg! f #f)
   (set-face-bold! f #f)
@@ -146,18 +165,20 @@ Eq-identical, both-#f, and slot-wise equal all qualify."
   (set-face-blink! f #f)
   (set-face-inverse! f #f)
   (set-face-conceal! f #f)
-  (set-face-crossed! f #f))
+  (set-face-crossed! f #f)
+  (set-face-overline! f #f))
 
 (define-record-type <term>
   (%make-term width height chars faces main-chars main-faces
               cx cy pending-wrap?
               saved-cx saved-cy saved-pending-wrap? saved-attrs attrs
               scroll-top scroll-bottom
-              parser-state csi-params csi-format osc-buf
+              parser-state csi-params csi-format osc-buf dcs-buf
               modes cursor-style
               g0 g1 g2 g3 active-charset
               scrollback scrollback-size max-scrollback
-              input-fn bell-fn title-fn cwd-fn
+              input-fn bell-fn title-fn cwd-fn clipboard-fn
+              notification-fn mouse-shape-fn
               title cwd last-char in-alt?
               last-write-face)
   term?
@@ -182,6 +203,7 @@ Eq-identical, both-#f, and slot-wise equal all qualify."
   (csi-params       term-csi-params       set-term-csi-params!)
   (csi-format       term-csi-format       set-term-csi-format!)
   (osc-buf          term-osc-buf          set-term-osc-buf!)
+  (dcs-buf          term-dcs-buf          set-term-dcs-buf!)
   (modes            term-modes)
   (cursor-style     term-cursor-style     set-term-cursor-style!)
   (g0               term-g0               set-term-g0!)
@@ -196,6 +218,9 @@ Eq-identical, both-#f, and slot-wise equal all qualify."
   (bell-fn          term-bell-fn          set-term-bell-fn!)
   (title-fn         term-title-fn         set-term-title-fn!)
   (cwd-fn           term-cwd-fn           set-term-cwd-fn!)
+  (clipboard-fn     term-clipboard-fn     set-term-clipboard-fn!)
+  (notification-fn  term-notification-fn  set-term-notification-fn!)
+  (mouse-shape-fn   term-mouse-shape-fn   set-term-mouse-shape-fn!)
   (title            term-title            set-term-title!)
   (cwd              term-cwd              set-term-cwd!)
   (last-char        term-last-char        set-term-last-char!)
@@ -225,6 +250,8 @@ Eq-identical, both-#f, and slot-wise equal all qualify."
 (define* (make-term #:key (width 80) (height 24)
                     (input-fn #f) (bell-fn #f)
                     (title-fn #f) (cwd-fn #f)
+                    (clipboard-fn #f)
+                    (notification-fn #f) (mouse-shape-fn #f)
                     (max-scrollback 10000))
   "Return a fresh <term> of WIDTH × HEIGHT cells.  INPUT-FN /
 BELL-FN / TITLE-FN / CWD-FN are optional callbacks invoked by the
@@ -238,7 +265,7 @@ scrollback ring; 0 disables it."
                 0 0 #f
                 0 0 #f (default-face-attrs) (default-face-attrs)
                 0 (- height 1)
-                #f '() #f ""
+                #f '() #f "" ""
                 (make-mode-state)
                 'block
                 'us-ascii 'us-ascii 'us-ascii 'us-ascii 'g0
@@ -246,7 +273,8 @@ scrollback ring; 0 disables it."
                     (make-vector 64 #f)
                     #f)
                 0 max-scrollback
-                input-fn bell-fn title-fn cwd-fn
+                input-fn bell-fn title-fn cwd-fn clipboard-fn
+                notification-fn mouse-shape-fn
                 "" "" #\space #f
                 #f)))
 
@@ -335,6 +363,7 @@ us-ascii, attrs cleared, grid cleared, alt-screen exited."
   (set-term-csi-params! t '())
   (set-term-csi-format! t #f)
   (set-term-osc-buf! t "")
+  (set-term-dcs-buf! t "")
   (set-term-cursor-x! t 0)
   (set-term-cursor-y! t 0)
   (set-term-pending-wrap! t #f)
