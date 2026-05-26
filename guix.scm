@@ -19,7 +19,7 @@
 (define-public guile-canary
   (package
     (name "guile-canary")
-    (version "0.1.0")
+    (version "0.2.0")
     (source %canary-source)
     (build-system gnu-build-system)
     (arguments

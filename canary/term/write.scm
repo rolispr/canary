@@ -52,14 +52,44 @@ share face identity by `eq?`."
           (set-term-last-write-face! term c)
           c))))
 
+(define (consume-pending-wrap! term)
+  "If TERM has the pending-wrap flag set, clear it.  When auto-margin
+is enabled, also wrap to column 0 of the next row, scrolling the
+scroll region at the bottom.  Honours the spec rule that printing at
+the last column sets a flag rather than advancing the cursor; the
+next print consumes the flag."
+  (when (term-pending-wrap? term)
+    (set-term-pending-wrap! term #f)
+    (when (term-auto-margin? term)
+      (set-term-cursor-x! term 0)
+      (cond
+       ((= (term-cursor-y term) (term-scroll-bottom term))
+        (term-scroll-up! term 1))
+       (else
+        (set-term-cursor-y! term (+ (term-cursor-y term) 1)))))))
+
+(define (advance-after-write! term x cw)
+  "Advance TERM's cursor after writing a char of display width CW at
+column X.  If the advance would step past the right edge, leave the
+cursor at the last column and set the pending-wrap flag instead of
+walking off the grid."
+  (let ((w (term-width term)))
+    (cond
+     ((>= (+ x cw) w)
+      (set-term-cursor-x! term (- w 1))
+      (set-term-pending-wrap! term #t))
+     (else
+      (set-term-cursor-x! term (+ x cw))))))
+
 (define* (term-write! term str #:optional (start 0) (end #f))
   "Write the substring of STR from START to END (default whole STR)
 to TERM at the current cursor, advancing the cursor and honouring
 auto-margin, insert mode, charset translation, and wide-character
 sentinel placement.  Zero-width chars are skipped; wide chars
-occupy two cells with a sentinel in the second."
+occupy two cells with a sentinel in the second.  Printing at the
+last column sets the pending-wrap flag; the next character honours
+it (wrapping when auto-margin is on, overwriting otherwise)."
   (let* ((end (or end (string-length str)))
-         (w (term-width term))
          (charset (current-charset-mapping term))
          (face (current-write-face term)))
     (let loop ((idx start))
@@ -68,22 +98,13 @@ occupy two cells with a sentinel in the second."
                (ch (translate-charset raw charset))
                (cw (char-display-width ch)))
           (unless (zero? cw)
+            (consume-pending-wrap! term)
             (set-term-last-char! term ch)
             (when (term-insert? term)
               (term-insert-char! term cw))
-            (when (>= (term-cursor-x term) w)
-              (cond
-               ((term-auto-margin? term)
-                (set-term-cursor-x! term 0)
-                (cond
-                 ((= (term-cursor-y term) (term-scroll-bottom term))
-                  (term-scroll-up! term 1))
-                 (else
-                  (set-term-cursor-y! term (+ (term-cursor-y term) 1)))))
-               (else
-                (set-term-cursor-x! term (- w 1)))))
             (let ((x (term-cursor-x term))
-                  (y (term-cursor-y term)))
+                  (y (term-cursor-y term))
+                  (w (term-width term)))
               (cond
                ((and (= cw 2) (>= (+ x 1) w))
                 (set-term-cell-at! term x y #\space face)
@@ -96,14 +117,14 @@ occupy two cells with a sentinel in the second."
                 (let ((x2 (term-cursor-x term))
                       (y2 (term-cursor-y term)))
                   (set-term-cell-at! term x2 y2 ch face)
-                  (when (and (= cw 2) (< (+ x2 1) w))
+                  (when (< (+ x2 1) w)
                     (set-term-cell-at! term (+ x2 1) y2
                                        (integer->char +wide-cont+) face))
-                  (set-term-cursor-x! term (+ x2 cw))))
+                  (advance-after-write! term x2 cw)))
                (else
                 (set-term-cell-at! term x y ch face)
                 (when (and (= cw 2) (< (+ x 1) w))
                   (set-term-cell-at! term (+ x 1) y
                                      (integer->char +wide-cont+) face))
-                (set-term-cursor-x! term (+ x cw))))))
+                (advance-after-write! term x cw)))))
           (loop (+ idx 1)))))))

@@ -36,52 +36,68 @@
 
 (define* (term-cursor-right! term #:optional (n 1))
   "Move TERM's cursor right by N cells, clamped to the rightmost
-column."
+column.  Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (let ((n (clamp-min n 1))
         (max-x (- (term-width term) 1)))
     (set-term-cursor-x! term (min (+ (term-cursor-x term) n) max-x))))
 
 (define* (term-cursor-left! term #:optional (n 1))
-  "Move TERM's cursor left by N cells, clamped to column 0."
+  "Move TERM's cursor left by N cells, clamped to column 0.  Clears
+the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (let ((n (clamp-min n 1)))
     (set-term-cursor-x! term (max (- (term-cursor-x term) n) 0))))
 
 (define* (term-cursor-down! term #:optional (n 1))
-  "Move TERM's cursor down by N cells, clamped to the bottom row."
+  "Move TERM's cursor down by N cells, clamped to the bottom row.
+Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (let ((n (clamp-min n 1))
         (max-y (- (term-height term) 1)))
     (set-term-cursor-y! term (min (+ (term-cursor-y term) n) max-y))))
 
 (define* (term-cursor-up! term #:optional (n 1))
-  "Move TERM's cursor up by N cells, clamped to row 0."
+  "Move TERM's cursor up by N cells, clamped to row 0.  Clears the
+pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (let ((n (clamp-min n 1)))
     (set-term-cursor-y! term (max (- (term-cursor-y term) n) 0))))
 
 (define* (term-cursor-horizontal-abs! term #:optional (n 1))
-  "Position TERM's cursor at 1-indexed column N (clamped to grid)."
+  "Position TERM's cursor at 1-indexed column N (clamped to grid).
+Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (set-term-cursor-x! term (min (max (- n 1) 0) (- (term-width term) 1))))
 
 (define* (term-cursor-vertical-abs! term #:optional (n 1))
-  "Position TERM's cursor at 1-indexed row N (clamped to grid)."
+  "Position TERM's cursor at 1-indexed row N (clamped to grid).
+Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (set-term-cursor-y! term (min (max (- n 1) 0) (- (term-height term) 1))))
 
 (define* (term-goto! term #:optional (y 1) (x 1))
-  "Position TERM's cursor at 1-indexed (X, Y), clamped to grid."
+  "Position TERM's cursor at 1-indexed (X, Y), clamped to grid.
+Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (set-term-cursor-y! term (min (max (- (or y 1) 1) 0) (- (term-height term) 1)))
   (set-term-cursor-x! term (min (max (- (or x 1) 1) 0) (- (term-width term) 1))))
 
 (define (term-save-cursor! term)
-  "Snapshot TERM's cursor position and attribute state into the
-save slots, restorable via `term-restore-cursor!`."
+  "Snapshot TERM's cursor position, pending-wrap flag, and attribute
+state into the save slots, restorable via `term-restore-cursor!`."
   (set-term-saved-cursor-x! term (term-cursor-x term))
   (set-term-saved-cursor-y! term (term-cursor-y term))
+  (set-term-saved-pending-wrap! term (term-pending-wrap? term))
   (set-term-saved-attrs! term (copy-face-attrs (term-attrs term))))
 
 (define (term-restore-cursor! term)
-  "Restore TERM's cursor position and attribute state from the
-slots saved by `term-save-cursor!`.  No-op if nothing was saved."
+  "Restore TERM's cursor position, pending-wrap flag, and attribute
+state from the slots saved by `term-save-cursor!`.  No-op if nothing
+was saved."
   (set-term-cursor-x! term (term-saved-cursor-x term))
   (set-term-cursor-y! term (term-saved-cursor-y term))
+  (set-term-pending-wrap! term (term-saved-pending-wrap? term))
   (let ((saved (term-saved-attrs term)))
     (when saved
       (let ((cur (term-attrs term)))
@@ -329,7 +345,8 @@ Lines below it shift up; the bottom N lines of the region clear."
 
 (define* (term-horizontal-tab! term #:optional (n 1))
   "Advance the cursor by N tab stops (every 8 columns), clamped to
-the rightmost column."
+the rightmost column.  Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (let* ((n (clamp-min n 1))
          (x (term-cursor-x term))
          (w (term-width term))
@@ -341,7 +358,8 @@ the rightmost column."
 
 (define* (term-horizontal-backtab! term #:optional (n 1))
   "Retreat the cursor by N tab stops (every 8 columns), clamped to
-column 0."
+column 0.  Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (let* ((n (clamp-min n 1))
          (x (term-cursor-x term))
          (prev-tab (if (zero? (modulo x 8))
@@ -354,7 +372,8 @@ column 0."
 
 (define (term-index! term)
   "Move the cursor down one row; at the scroll bottom, scroll up
-instead.  Column unchanged."
+instead.  Column unchanged.  Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (let ((y (term-cursor-y term))
         (bot (term-scroll-bottom term)))
     (cond
@@ -364,7 +383,8 @@ instead.  Column unchanged."
 
 (define (term-reverse-index! term)
   "Move the cursor up one row; at the scroll top, scroll down
-instead.  Column unchanged."
+instead.  Column unchanged.  Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (let ((y (term-cursor-y term))
         (top (term-scroll-top term)))
     (cond
@@ -374,7 +394,8 @@ instead.  Column unchanged."
 
 (define (term-line-feed! term)
   "CR+LF: reset cursor to column 0 and advance one row, scrolling
-at the bottom of the scroll region."
+at the bottom of the scroll region.  Clears the pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (let* ((y (term-cursor-y term))
          (bot (term-scroll-bottom term)))
     (set-term-cursor-x! term 0)
@@ -384,7 +405,9 @@ at the bottom of the scroll region."
       (set-term-cursor-y! term (+ y 1))))))
 
 (define (term-carriage-return! term)
-  "Reset the cursor to column 0 of its current row."
+  "Reset the cursor to column 0 of its current row.  Clears the
+pending-wrap flag."
+  (set-term-pending-wrap! term #f)
   (set-term-cursor-x! term 0))
 
 (define* (term-set-scroll-region! term #:optional top bottom)

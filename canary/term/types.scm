@@ -32,8 +32,10 @@
             term-main-faces set-term-main-faces!
             term-cursor-x set-term-cursor-x!
             term-cursor-y set-term-cursor-y!
+            term-pending-wrap? set-term-pending-wrap!
             term-saved-cursor-x set-term-saved-cursor-x!
             term-saved-cursor-y set-term-saved-cursor-y!
+            term-saved-pending-wrap? set-term-saved-pending-wrap!
             term-saved-attrs set-term-saved-attrs!
             term-attrs set-term-attrs!
             term-scroll-top set-term-scroll-top!
@@ -150,7 +152,8 @@ Eq-identical, both-#f, and slot-wise equal all qualify."
 
 (define-record-type <term>
   (%make-term width height chars faces main-chars main-faces
-              cx cy saved-cx saved-cy saved-attrs attrs
+              cx cy pending-wrap?
+              saved-cx saved-cy saved-pending-wrap? saved-attrs attrs
               scroll-top scroll-bottom
               parser-state csi-params csi-format osc-buf
               auto-margin? insert? keypad? bracketed-paste?
@@ -169,8 +172,11 @@ Eq-identical, both-#f, and slot-wise equal all qualify."
   (main-faces       term-main-faces       set-term-main-faces!)
   (cx               term-cursor-x         set-term-cursor-x!)
   (cy               term-cursor-y         set-term-cursor-y!)
+  (pending-wrap?    term-pending-wrap?    set-term-pending-wrap!)
   (saved-cx         term-saved-cursor-x   set-term-saved-cursor-x!)
   (saved-cy         term-saved-cursor-y   set-term-saved-cursor-y!)
+  (saved-pending-wrap? term-saved-pending-wrap?
+                       set-term-saved-pending-wrap!)
   (saved-attrs      term-saved-attrs      set-term-saved-attrs!)
   (attrs            term-attrs            set-term-attrs!)
   (scroll-top       term-scroll-top       set-term-scroll-top!)
@@ -236,7 +242,8 @@ scrollback ring; 0 disables it."
     (%make-term width height
                 (alloc-chars n) (alloc-faces n)
                 #f #f
-                0 0 0 0 (default-face-attrs) (default-face-attrs)
+                0 0 #f
+                0 0 #f (default-face-attrs) (default-face-attrs)
                 0 (- height 1)
                 #f '() #f ""
                 #t #f #f #f
@@ -337,6 +344,7 @@ us-ascii, attrs cleared, grid cleared, alt-screen exited."
   (set-term-osc-buf! t "")
   (set-term-cursor-x! t 0)
   (set-term-cursor-y! t 0)
+  (set-term-pending-wrap! t #f)
   (set-term-scroll-top! t 0)
   (set-term-scroll-bottom! t (- (term-height t) 1))
   (set-term-auto-margin! t #t)
@@ -401,6 +409,7 @@ non-positive."
       (set-term-scroll-bottom! t (- rows 1))
       (set-term-cursor-x! t (min (term-cursor-x t) (- cols 1)))
       (set-term-cursor-y! t (min (term-cursor-y t) (- rows 1)))
+      (set-term-pending-wrap! t #f)
       (when (term-in-alt? t)
         (let ((old-main-chars (term-main-chars t))
               (old-main-faces (term-main-faces t)))
