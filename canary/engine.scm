@@ -35,7 +35,8 @@
   #:use-module (fibers channels)
   #:use-module (fibers operations)
   #:use-module ((fibers io-wakeup) #:select (wait-until-port-readable-operation))
-  #:use-module ((fibers timers) #:select ((sleep . fiber-sleep)))
+  #:use-module ((fibers timers) #:select ((sleep . fiber-sleep)
+                                          sleep-operation))
   #:use-module (ice-9 threads)
   #:use-module (ice-9 receive)
   #:use-module (ice-9 match)
@@ -197,33 +198,40 @@ are logged, never raised."
 (define (walk-nodes node sz proc)
   "Walk the view tree rooted at NODE, calling PROC on every widget
 encountered.  Descends through layout containers; uses SZ when
-materialising lazy widget subviews via memoized-view."
-  (cond
-   ((not node) #f)
-   ((string? node) #f)
-   ((vbox-node? node)
-    (for-each (lambda (c) (walk-nodes c sz proc)) (vbox-node-items node)))
-   ((hbox-node? node)
-    (for-each (lambda (c) (walk-nodes c sz proc)) (hbox-node-items node)))
-   ((boxed-node? node)   (walk-nodes (boxed-node-body node) sz proc))
-   ((pad-node? node)     (walk-nodes (pad-node-body node) sz proc))
-   ((margin-node? node)  (walk-nodes (margin-node-body node) sz proc))
-   ((align-node? node)   (walk-nodes (align-node-body node) sz proc))
-   ((width-node? node)   (walk-nodes (width-node-body node) sz proc))
-   ((height-node? node)  (walk-nodes (height-node-body node) sz proc))
-   ((static-node? node)  (walk-nodes (static-node-body node) sz proc))
-   ((click-node? node)   (walk-nodes (click-node-body node) sz proc))
-   ((hover-node? node)   (walk-nodes (hover-node-body node) sz proc))
-   ((flex-node? node)    (walk-nodes (flex-node-body node) sz proc))
-   ((wrap-node? node)    #f)
-   ((overlay-node? node)
-    (walk-nodes (overlay-node-base node) sz proc)
-    (for-each (lambda (p) (walk-nodes (placement-body p) sz proc))
-              (overlay-node-overlays node)))
-   ((is-a? node <object>)
-    (proc node)
-    (walk-nodes (memoized-view node) sz proc))
-   (else #f)))
+materialising lazy widget subviews via memoized-view.  Returns a
+hashq used as the set of widgets seen during the walk — callers
+that only want the side effects (cascade!) can ignore it; callers
+that need the live set (refresh-live-widgets!) consume it."
+  (let ((seen (make-hash-table)))
+    (let walk ((node node))
+      (cond
+       ((not node) #f)
+       ((string? node) #f)
+       ((vbox-node? node)
+        (for-each walk (vbox-node-items node)))
+       ((hbox-node? node)
+        (for-each walk (hbox-node-items node)))
+       ((boxed-node? node)   (walk (boxed-node-body node)))
+       ((pad-node? node)     (walk (pad-node-body node)))
+       ((margin-node? node)  (walk (margin-node-body node)))
+       ((align-node? node)   (walk (align-node-body node)))
+       ((width-node? node)   (walk (width-node-body node)))
+       ((height-node? node)  (walk (height-node-body node)))
+       ((static-node? node)  (walk (static-node-body node)))
+       ((click-node? node)   (walk (click-node-body node)))
+       ((hover-node? node)   (walk (hover-node-body node)))
+       ((flex-node? node)    (walk (flex-node-body node)))
+       ((wrap-node? node)    #f)
+       ((overlay-node? node)
+        (walk (overlay-node-base node))
+        (for-each (lambda (p) (walk (placement-body p)))
+                  (overlay-node-overlays node)))
+       ((is-a? node <object>)
+        (hashq-set! seen node #t)
+        (proc node)
+        (walk (memoized-view node)))
+       (else #f)))
+    seen))
 
 ;;; ── input + dispatch ───────────────────────────────────────────────
 
@@ -247,6 +255,12 @@ sessions)."
                   (now (get-internal-real-time)))
               (cond
                ((not msg) (loop last-mouse-time))
+               ((resize? msg)
+                ;; ESC[8;rows;cols t reply: feed straight into the
+                ;; debounce channel instead of the normal msg queue,
+                ;; so drag-resize bursts coalesce.
+                (put-message (engine-resize-channel eng) msg)
+                (drain last-mouse-time))
                ((not (mouse? msg)) (send eng msg) (drain last-mouse-time))
                (else
                 (let ((elapsed-ms (quotient (* (- now last-mouse-time) 1000)
@@ -337,15 +351,11 @@ widgets, not just the focused one."
      (lambda (node) (dispatch-update! eng node msg cmds-cell)))
     (cmds->batched (car cmds-cell))))
 
-(define (collect-live-widgets eng)
-  "Walk ENG's tree and return a hashq used as a set of every widget
-currently visible.  Identity-keyed so two widgets that happen to
-compare equal stay distinct."
-  (let ((seen (make-hash-table))
-        (sz   (backend-size (engine-backend eng))))
-    (walk-nodes (engine-root eng) sz
-                (lambda (node) (hashq-set! seen node #t)))
-    seen))
+(define (unmount-widget! eng w cmds-cell)
+  "Dispatch <unmount> to W and cancel every sub it installed."
+  (dispatch-update! eng w (unmount) cmds-cell)
+  (let ((ids (hashq-ref (engine-widget-subs eng) w '())))
+    (for-each (lambda (id) (cancel-sub! eng id)) ids)))
 
 (define (refresh-live-widgets! eng)
   "Diff ENG's current tree against the previous frame's live set.
@@ -353,7 +363,9 @@ Dispatch <mount> to widgets that just appeared and <unmount> to
 widgets that just departed; auto-cancel any subs the departing
 widgets owned.  Cmds returned by mount/unmount handlers are batched
 and run."
-  (let* ((seen (collect-live-widgets eng))
+  (let* ((seen (walk-nodes (engine-root eng)
+                           (backend-size (engine-backend eng))
+                           (lambda (_) #f)))
          (live (engine-live-widgets eng))
          (mounted   '())
          (unmounted '()))
@@ -368,15 +380,21 @@ and run."
         (for-each
          (lambda (w) (dispatch-update! eng w (mount) cmds-cell))
          mounted)
-        (for-each
-         (lambda (w)
-           (dispatch-update! eng w (unmount) cmds-cell)
-           (let ((ids (hashq-ref (engine-widget-subs eng) w '())))
-             (for-each (lambda (id) (cancel-sub! eng id)) ids)))
-         unmounted)
+        (for-each (lambda (w) (unmount-widget! eng w cmds-cell)) unmounted)
         (let ((cmd (cmds->batched (car cmds-cell))))
           (when cmd (run-cmd! eng cmd)))))
     (set-engine-live-widgets! eng seen)))
+
+(define (unmount-all! eng)
+  "Cascade <unmount> to every widget in ENG's live set and cancel
+their subs.  Called on engine shutdown so subscription fibers stop
+cleanly instead of being left to leak."
+  (let ((cmds-cell (list '()))
+        (live      (engine-live-widgets eng)))
+    (hash-for-each (lambda (w _) (unmount-widget! eng w cmds-cell)) live)
+    (set-engine-live-widgets! eng (make-hash-table))
+    (let ((cmd (cmds->batched (car cmds-cell))))
+      (when cmd (run-cmd! eng cmd)))))
 
 (define (find-focus-path root sz target)
   "Walk the source tree from ROOT looking for the widget TARGET.
@@ -657,13 +675,10 @@ Routing policy:
    ((resize-flushed? msg)
     (handle-resize! eng (cdr msg)) #t)
    ((resize? msg)
-    ;; Park the latest <resize> in the engine and wake the debounce
-    ;; fiber.  The fiber flushes a single <resize-flushed> back into
-    ;; the queue once 50 ms of quiescence passes — squashes drag-resize
-    ;; bursts down to one cascade + one full repaint.
-    (with-mutex (engine-pending-resize-mutex eng)
-      (set-engine-pending-resize! eng msg))
-    (ring! (engine-resize-bell eng))
+    ;; SIGWINCH path: the signal handler runs send eng to enqueue a
+    ;; <resize>.  Re-route onto the debounce channel so drag-resize
+    ;; bursts coalesce to one flushed resize per burst.
+    (put-message (engine-resize-channel eng) msg)
     #f)
    ((mouse-left-press? msg)
     (note-mouse-pos! eng msg)
@@ -739,15 +754,9 @@ Routing policy:
                (cmd (and m (route-to-focus! eng m))))
           (run-cmd! eng cmd)))
       (or moved? drag?)))
-   ;; Key (and non-press mouse) routing. When focus is on something
-   ;; OTHER than the root widget — i.e. (engine-focus-chain eng) is
-   ;; non-empty — the app has explicitly handed keys to that widget
-   ;; (a textinput, modal dialog, etc.). Skip the keymap in that
-   ;; case so letter keys reach the focused widget instead of being
-   ;; eaten by an app-level binding. The keymap remains the fallback
-   ;; when nothing has focus.
    ((and (key? msg)
-         (pair? (engine-focus-chain eng)))
+         (pair? (engine-focus-chain eng))
+         (pair? (cdr (engine-focus-chain eng))))
     (let* ((m (apply-filter eng msg))
            (cmd (and m (route-to-focus! eng m))))
       (run-cmd! eng cmd) #t))
@@ -775,29 +784,45 @@ Routing policy:
 (define +resize-debounce-seconds+ 0.05)
 
 (define (resize-debounce-loop eng)
-  "Wait on ENG's resize-bell, then settle until 50 ms pass with no
-newer <resize> showing up in pending-resize.  When stable, send a
-wrapped <resize-flushed> back to the engine for the event-loop to
-cascade and re-render.  One coalesced flush per drag-resize burst."
-  (let ((rd (car (engine-resize-bell eng))))
+  "Receive <resize> msgs from ENG's resize-channel; coalesce any
+bursts that arrive within a 50 ms quiescence window; emit one wrapped
+<resize-flushed> back into the engine per burst.  Wakes on stop-ch
+so shutdown can drop a fiber that would otherwise block on the
+channel forever."
+  (let ((ch      (engine-resize-channel eng))
+        (stop-rd (car (engine-stop-ch eng))))
+    (define (await-event timeout)
+      "Block on the next channel msg, a stop signal, or the timeout.
+Returns ('msg . resize), 'stop, or 'flush.  TIMEOUT in seconds, or
+#f to wait indefinitely."
+      (perform-operation
+       (apply choice-operation
+              (let ((ops (list
+                          (wrap-operation (get-operation ch)
+                                          (lambda (m) (cons 'msg m)))
+                          (wrap-operation
+                           (wait-until-port-readable-operation stop-rd)
+                           (lambda _ 'stop)))))
+                (if timeout
+                    (cons (wrap-operation (sleep-operation timeout)
+                                          (lambda _ 'flush))
+                          ops)
+                    ops)))))
     (let loop ()
       (when (engine-running? eng)
-        (perform-operation (wait-until-port-readable-operation rd))
-        (drain-bell! (engine-resize-bell eng))
-        (let settle ()
-          (let ((before (with-mutex (engine-pending-resize-mutex eng)
-                          (engine-pending-resize eng))))
-            (when before
-              (fiber-sleep +resize-debounce-seconds+)
-              (let ((after (with-mutex (engine-pending-resize-mutex eng)
-                             (engine-pending-resize eng))))
+        (let ((first (await-event #f)))
+          (cond
+           ((eq? first 'stop) #f)
+           (else
+            (let coalesce ((latest (cdr first)))
+              (let ((event (await-event +resize-debounce-seconds+)))
                 (cond
-                 ((eq? before after)
-                  (with-mutex (engine-pending-resize-mutex eng)
-                    (set-engine-pending-resize! eng #f))
-                  (send eng (cons 'resize-flushed before)))
-                 (else (settle)))))))
-        (loop)))))
+                 ((eq? event 'stop) #f)
+                 ((eq? event 'flush)
+                  (when (engine-running? eng)
+                    (send eng (cons 'resize-flushed latest)))
+                  (loop))
+                 (else (coalesce (cdr event))))))))))) ))
 
 (define (event-loop eng)
   "Main message-processing loop for ENG.  Sleeps on the msg-bell,
@@ -935,6 +960,7 @@ session server) owns those."
                     (resize (size-width sz) (size-height sz)))))
   (perform-operation
    (wait-until-port-readable-operation (car (engine-stop-ch eng))))
+  (unmount-all! eng)
   (backend-shutdown (engine-backend eng)))
 
 (define* (run-app root #:key title (keymap #f) (theme #f) (mouse 'off)
@@ -949,9 +975,9 @@ backend, plus log-overlay config."
          (eng (make-engine #:backend b #:theme th #:keymap km #:title title
                            #:mouse-mode mouse #:cursor cursor
                            #:alt-screen? alt-screen? #:filter filter #:root root
-                           #:msg-bell     (make-bell-pipe)
-                           #:stop-ch      (make-bell-pipe)
-                           #:resize-bell  (make-bell-pipe)
+                           #:msg-bell       (make-bell-pipe)
+                           #:stop-ch        (make-bell-pipe)
+                           #:resize-channel (make-channel)
                            #:log-cap log-cap #:show-log? show-log?
                            #:log-height-frac log-height-frac))
          (cleanup-done #f)
@@ -962,6 +988,7 @@ backend, plus log-overlay config."
     (define (do-cleanup)
       (unless cleanup-done
         (set! cleanup-done #t)
+        (unmount-all! eng)
         (backend-shutdown (engine-backend eng))
         (when saved-stderr-fd (%dup2 saved-stderr-fd 2))))
     (catch #t
@@ -975,11 +1002,12 @@ backend, plus log-overlay config."
             (setup-signal-handlers do-cleanup)
             (setup-resize-handler
              (lambda ()
-               ;; SIGWINCH → read size via TIOCGWINSZ and synthesise a
-               ;; <resize> msg directly. Many terminals (gnome, foot,
-               ;; alacritty in some configs) silently drop \e[18t so
-               ;; the previous round-trip-based path produced no
-               ;; resize. ioctl works on Linux + macOS reliably.
+               ;; SIGWINCH → read size via TIOCGWINSZ and queue a
+               ;; <resize> through the normal msg path (send eng).
+               ;; process-one then puts it on resize-channel where
+               ;; the debounce fiber sees it.  put-message can't run
+               ;; here directly — it suspends on an unbuffered
+               ;; channel, and Guile signal handlers must not block.
                (catch #t
                  (lambda ()
                    (let ((sz (get-terminal-size)))

@@ -27,9 +27,7 @@
             engine-log-height-frac set-engine-log-height-frac!
             engine-focus-chain set-engine-focus-chain!
             engine-subs
-            engine-pending-resize set-engine-pending-resize!
-            engine-pending-resize-mutex
-            engine-resize-bell
+            engine-resize-channel
             engine-live-widgets set-engine-live-widgets!
             engine-widget-subs))
 
@@ -38,8 +36,7 @@
                 filter root running? msg-queue queue-mutex msg-bell
                 stop-ch click-regions mouse-x mouse-y
                 log-entries log-cap show-log? log-height-frac
-                focus-chain subs
-                pending-resize pending-resize-mutex resize-bell
+                focus-chain subs resize-channel
                 live-widgets widget-subs)
   engine?
   (backend     engine-backend         set-engine-backend!)
@@ -65,12 +62,11 @@
   (log-height-frac engine-log-height-frac set-engine-log-height-frac!)
   (focus-chain engine-focus-chain     set-engine-focus-chain!)
   (subs        engine-subs)
-  ;; Resize debounce: the latest <resize> seen since the last flush,
-  ;; mutex-guarded so the signal handler and the debounce fiber can
-  ;; race safely.  resize-bell wakes the fiber.
-  (pending-resize       engine-pending-resize       set-engine-pending-resize!)
-  (pending-resize-mutex engine-pending-resize-mutex)
-  (resize-bell          engine-resize-bell)
+  ;; Resize debounce: a fibers channel that receives every <resize>
+  ;; from SIGWINCH and the ESC[8 path.  The debounce fiber pulls from
+  ;; it, coalesces bursts within a 50 ms quiescence window, and emits
+  ;; a single flushed resize back into the engine.
+  (resize-channel engine-resize-channel)
   ;; Widget lifecycle: live-widgets is a hashq used as the set of
   ;; widgets present in the most recent frame; widget-subs maps a
   ;; widget to the list of sub ids it installed, so unmounting one
@@ -80,7 +76,7 @@
 
 (define* (make-engine #:key backend theme keymap title (mouse-mode 'off)
                       (cursor 'hidden) (alt-screen? #t) filter root
-                      msg-bell stop-ch resize-bell
+                      msg-bell stop-ch resize-channel
                       (log-cap 200) (show-log? #t) (log-height-frac 1/5))
   "Return a fresh <engine> wired up with the supplied collaborators.
 BACKEND, THEME, KEYMAP, ROOT and the message-bell / stop-channel
@@ -92,6 +88,5 @@ trackers) starts empty."
   (%make-engine backend theme keymap title mouse-mode cursor alt-screen?
                 filter root #t '() (make-mutex) msg-bell
                 stop-ch '() -1 -1 '() log-cap show-log? log-height-frac
-                '() (make-hash-table)
-                #f (make-mutex) resize-bell
+                '() (make-hash-table) resize-channel
                 (make-hash-table) (make-hash-table)))

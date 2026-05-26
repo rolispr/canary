@@ -183,33 +183,46 @@ No "consumed, stop" sentinel — every node in the chain fires for
 every key/mouse msg. Compose by ordering state mutations across
 update methods.
 
-Non-key/mouse msgs (`<init>`, `<tick>`, `<resize>`, focus/blur,
-keymap-mapped actions like `'save`, `on-click` action symbols, user
-msgs sent via `send`) still **broadcast** through the whole tree —
-that's the right shape for "tick all animations" or "everyone gets
-init" or "any widget can react to 'save."
+Non-key/mouse msgs (`<init>`, `<tick>`, `<resize>`, `<paste>`,
+`<mount>`, `<unmount>`, focus/blur, keymap-mapped actions like
+`'save`, `on-click` action symbols, user msgs sent via `send`) still
+**broadcast** through the whole tree — that's the right shape for
+"tick all animations" or "everyone gets init" or "any widget can
+react to 'save." A `<paste>` rides the same broadcast; the focused
+text input picks it up by matching on the class, no special routing.
 
-Subscription lifetime: an `every` or `after` cmd without `#:id`
-installs an anonymous fiber that lives until the engine stops — no
-way to cancel. With `#:id`, the engine maps that id to the fiber.
-Re-issuing the same `(every #:id k …)` is idempotent (a no-op if k
-is already installed). `(cancel k)` stops it.
+### Widget lifecycle
+
+The engine tracks the set of widgets visible in the current frame
+and diffs it against the previous one. A widget that appears for the
+first time gets `<mount>`; a widget that leaves the tree gets
+`<unmount>`. `<init>` still fires once at startup (app-level boot
+hook); `<mount>` fires per widget on first appearance, then never
+again.
 
 ```scheme
-;; A spinner that ticks only while loading.
-(define-method (update (c <my>) (msg <init>)) (values c #f))
+(define-method (update (s <spinner>) (msg <mount>))
+  ;; Install the tick subscription; the engine auto-cancels it on
+  ;; <unmount> because it was installed while this widget was the
+  ;; current dispatch target.
+  (values s (every #:hz 10 #:id (list 'spinner-tick s) (lambda () (tick)))))
 
-(define-method (update (c <my>) (msg <load-start>))
-  (values c (every #:hz 10 #:id 'spinner-tick (lambda () (tick)))))
-
-(define-method (update (c <my>) (msg <load-done>))
-  (values c (cancel 'spinner-tick)))
+(define-method (update (s <spinner>) (msg <unmount>))
+  ;; Nothing to do — the sub is reaped for us.  Override if there's
+  ;; non-engine cleanup the widget needs.
+  (values s #f))
 ```
 
-The id is any `eq?`-comparable Scheme value — a symbol, a widget
-instance, a `(list 'tick widget)` pair for per-instance ids. Returning
-the same `(every #:id … …)` cmd every update is fine and cheap; the
-engine only spawns once.
+Any `every`/`after` installed while a widget's `update` is on the
+stack is tagged with that widget. Removing the widget from the view
+cancels the sub automatically; no need for a parallel
+`<load-start>`/`<load-done>` toggle.
+
+Subscriptions without `#:id` are anonymous and live until the engine
+stops — no cancel handle, no owner tag. Re-issuing the same `(every
+#:id k …)` is idempotent: the engine only spawns once. The id is any
+`eq?`-comparable Scheme value — a symbol, a widget instance, a
+`(list 'tick widget)` pair for per-instance ids.
 
 ## Live coding
 
@@ -234,18 +247,21 @@ No rebuild loop. The process keeps running across edits.
 
 Engine-emitted records matched in `update`.
 
-| record    | when                                          |
-|-----------|-----------------------------------------------|
-| `<key>`   | a keystroke (with optional modifiers)         |
-| `<mouse>` | mouse button / motion / scroll                |
-| `<tick>`  | an `every` or `after` cmd fired               |
-| `<resize>`| terminal size changed                         |
-| `<init>`  | once before the first user input              |
-| `<focus>` | terminal gained focus (msg ctor: `(focused)`) |
-| `<blur>`  | terminal lost focus  (msg ctor: `(blurred)`)  |
-| `<resume>`| engine reacquired tty after suspend           |
-| symbol    | keymap action; `on-click` action; user msg    |
-| list      | any user-defined shape via `(send eng …)`     |
+| record     | when                                          |
+|------------|-----------------------------------------------|
+| `<key>`    | a keystroke (with optional modifiers)         |
+| `<mouse>`  | mouse button / motion / scroll                |
+| `<tick>`   | an `every` or `after` cmd fired               |
+| `<resize>` | terminal size changed (debounced ~50 ms)      |
+| `<init>`   | once before the first user input              |
+| `<mount>`  | a widget just appeared in the view tree       |
+| `<unmount>`| a widget just left the view tree              |
+| `<paste>`  | a bracketed-paste payload (`paste-text` for the raw string) |
+| `<focus>`  | terminal gained focus (msg ctor: `(focused)`) |
+| `<blur>`   | terminal lost focus  (msg ctor: `(blurred)`)  |
+| `<resume>` | engine reacquired tty after suspend           |
+| symbol     | keymap action; `on-click` action; user msg    |
+| list       | any user-defined shape via `(send eng …)`     |
 
 Multi-method dispatch on the msg class is the natural shape:
 
@@ -318,8 +334,11 @@ visual.
 | `'(mouse left)` `'(mouse right)`        | mouse button               |
 | `'(mouse-scroll up)` `'(mouse-scroll down)` | scroll wheel           |
 
-Modifiers: `control`/`ctrl`, `alt`/`meta`/`option`, `shift`,
-`super`/`cmd`/`command`. Canonicalised, sorted, deduped internally.
+Modifiers: `control`/`ctrl`, `alt`/`option`, `shift`,
+`super`/`cmd`/`command`, `meta`, `hyper`. Canonicalised, sorted,
+deduped internally. `meta` and `hyper` are distinct mods (they match
+the kitty keyboard protocol's bit-field positions); `meta` is no
+longer an alias for `alt`.
 
 ```scheme
 (bind #\q 'quit)
@@ -485,7 +504,7 @@ Plain widget classes in `canary/components/`:
 - `<button>` — title + on-click
 - `<panel>`  — title + border + footer + content, with hover affordance
 - `<textinput>` — single-line input with cursor
-- `<spinner>` — animated frames, installs its own ticker on `<init>`
+- `<spinner>` — animated frames, installs its own ticker on `<mount>`
 - `<progress>` — bar with percentage
 - `<paginator>` — page indicator with key bindings
 - `<viewport>` — scrollable list of items with optional tail-mode auto-follow
@@ -510,6 +529,28 @@ msgs into it automatically.
 - **Don't** side-effect inside `view`. The cascade walker calls it
   once to find items before render calls it again to produce
   cmds; any effect fires twice per msg.
+
+## Terminal capabilities
+
+`backend-init` enables the following terminal modes; `backend-shutdown`
+restores them in reverse order:
+
+| escape         | mode                                              |
+|----------------|---------------------------------------------------|
+| `\e[?1049h`    | alternate screen buffer                           |
+| `\e[?25l`      | hide cursor                                       |
+| `\e[?1004h`    | focus reporting (`<focus>` / `<blur>`)            |
+| `\e[?2004h`    | bracketed paste (`<paste>` with `paste-text`)     |
+| `\e[>5u`       | kitty keyboard protocol, flags 1+4 (disambiguate + alternate keys) |
+
+Each frame's cell diff is bracketed by `\e[?2026h` … `\e[?2026l`
+(synchronized output), so terminals that honour it never paint a
+half-written frame.
+
+Mouse reporting is opt-in via the `#:mouse` kwarg on `run-app`
+(`'click`/`'cell`/`'all`). Kitty-graphics image support is detected
+at init via a capability probe; falls back to text fallback views
+when the terminal doesn't speak the protocol.
 
 ## Module surface
 

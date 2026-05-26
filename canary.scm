@@ -60,6 +60,6 @@
    every every? after after?
    set-title cursor alt-screen mouse-mode clear-screen
    println suspend exec set-palette cycle-palette clear-log
-   focus cancel set-keymap
+   focus cancel
 
    view-size view-node?))
