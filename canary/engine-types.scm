@@ -62,15 +62,7 @@
   (log-height-frac engine-log-height-frac set-engine-log-height-frac!)
   (focus-chain engine-focus-chain     set-engine-focus-chain!)
   (subs        engine-subs)
-  ;; Resize debounce: a fibers channel that receives every <resize>
-  ;; from SIGWINCH and the ESC[8 path.  The debounce fiber pulls from
-  ;; it, coalesces bursts within a 50 ms quiescence window, and emits
-  ;; a single flushed resize back into the engine.
   (resize-channel engine-resize-channel)
-  ;; Widget lifecycle: live-widgets is a hashq used as the set of
-  ;; widgets present in the most recent frame; widget-subs maps a
-  ;; widget to the list of sub ids it installed, so unmounting one
-  ;; cancels its tickers automatically.
   (live-widgets engine-live-widgets   set-engine-live-widgets!)
   (widget-subs  engine-widget-subs))
 

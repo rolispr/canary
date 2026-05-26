@@ -36,30 +36,31 @@ is enabled.  No-op otherwise."
       (close-port port))))
 
 (define (read-key-msg)
-  "Read one logical input event from the current input port, or
-return #f if no byte is ready.  Maps ESC into an escape-sequence
-parse, DEL into 'backspace, control bytes (< 32) into ctrl-letter
-keys, and other chars into bare keys."
+  "Read one logical input event from the current input port.  Returns
+#f when no byte is ready, the eof-object when the port has EOF'd,
+otherwise a key msg.  Maps ESC into an escape-sequence parse, DEL
+into 'backspace, control bytes (< 32) into ctrl-letter keys, and
+other chars into bare keys."
   (let ((port (current-input-port)))
-    (if (char-ready? port)
-        (let ((char (read-char port)))
-          (when char
-            (%ilog "read-key-msg: char='~a' code=~d" char (char->integer char))
-            (cond
-             ((char=? char #\escape)
-              (%ilog "read-key-msg: ESC detected -> parse-escape-start")
-              (parse-escape-start port))
-             ((= (char->integer char) 127)
-              (%ilog "read-key-msg: DEL(127) -> :backspace")
-              (key 'backspace))
-             ((< (char->integer char) 32)
-              (let ((k (ctrl-char-to-key char)))
-                (%ilog "read-key-msg: control char ~d -> ~a" (char->integer char) k)
-                (key k 'control)))
-             (else
-              (%ilog "read-key-msg: graphic '~a'" char)
-              (key char)))))
-        #f)))
+    (cond
+     ((not (char-ready? port)) #f)
+     (else
+      (let ((char (read-char port)))
+        (cond
+         ((eof-object? char) char)
+         ((char=? char #\escape)
+          (%ilog "read-key-msg: ESC detected -> parse-escape-start")
+          (parse-escape-start port))
+         ((= (char->integer char) 127)
+          (%ilog "read-key-msg: DEL(127) -> :backspace")
+          (key 'backspace))
+         ((< (char->integer char) 32)
+          (let ((k (ctrl-char-to-key char)))
+            (%ilog "read-key-msg: control char ~d -> ~a" (char->integer char) k)
+            (key k 'control)))
+         (else
+          (%ilog "read-key-msg: graphic '~a'" char)
+          (key char))))))))
 
 (define (ctrl-char-to-key char)
   "Map a control character CHAR (code < 32) to a key symbol or
@@ -225,10 +226,6 @@ or a final letter.  Returns the synthesised event or 'unknown."
                   (if (and h w (positive? h) (positive? w))
                       (resize w h)
                       (key 'unknown))))
-               ;; CSI codepoint[;modifiers] u — kitty keyboard protocol.
-               ;; Emitted whenever the terminal honours the flags pushed
-               ;; by `\e[>Nu`; lets us disambiguate ctrl+i from tab,
-               ;; report plain Esc unambiguously, etc.
                ((eqv? final #\u)
                 (parse-kitty-key params))
                (else (key 'unknown))))))
@@ -254,7 +251,7 @@ canonical mod symbols."
 (define (kitty-codepoint->sym cp)
   "Map a kitty CSI-u codepoint CP to a key symbol.  Plain ASCII
 becomes the char itself; control codes and the kitty functional
-range (57344+) map to named symbols (escape, tab, left, f1, …).
+range (57344+) map to named symbols (escape, tab, left, f1, ...).
 Falls back to integer->char for anything else."
   (cond
    ((= cp 27)    'escape)

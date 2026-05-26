@@ -199,9 +199,7 @@ are logged, never raised."
   "Walk the view tree rooted at NODE, calling PROC on every widget
 encountered.  Descends through layout containers; uses SZ when
 materialising lazy widget subviews via memoized-view.  Returns a
-hashq used as the set of widgets seen during the walk — callers
-that only want the side effects (cascade!) can ignore it; callers
-that need the live set (refresh-live-widgets!) consume it."
+hashq of widgets seen during the walk."
   (let ((seen (make-hash-table)))
     (let walk ((node node))
       (cond
@@ -250,25 +248,29 @@ sessions)."
       (when (engine-running? eng)
         (perform-operation (choice-operation wait-input wait-stop))
         (when (engine-running? eng)
-          (let drain ((last-mouse-time last-mouse-time))
-            (let ((msg (read-key-msg))
-                  (now (get-internal-real-time)))
-              (cond
-               ((not msg) (loop last-mouse-time))
-               ((resize? msg)
-                ;; ESC[8;rows;cols t reply: feed straight into the
-                ;; debounce channel instead of the normal msg queue,
-                ;; so drag-resize bursts coalesce.
-                (put-message (engine-resize-channel eng) msg)
-                (drain last-mouse-time))
-               ((not (mouse? msg)) (send eng msg) (drain last-mouse-time))
-               (else
-                (let ((elapsed-ms (quotient (* (- now last-mouse-time) 1000)
-                                            internal-time-units-per-second)))
-                  (cond
-                   ((or (= last-mouse-time 0) (> elapsed-ms 16))
-                    (send eng msg) (drain now))
-                   (else (drain last-mouse-time)))))))))))))
+          (cond
+           ((eof-object? (peek-char (current-input-port)))
+            ;; Client gone.  Stop the engine so the per-session fiber
+            ;; can return and dynamic-wind exits can run.
+            (stop-engine! eng))
+           (else
+            (let drain ((last-mouse-time last-mouse-time))
+              (let ((msg (read-key-msg))
+                    (now (get-internal-real-time)))
+                (cond
+                 ((eof-object? msg) (stop-engine! eng))
+                 ((not msg) (loop last-mouse-time))
+                 ((resize? msg)
+                  (put-message (engine-resize-channel eng) msg)
+                  (drain last-mouse-time))
+                 ((not (mouse? msg)) (send eng msg) (drain last-mouse-time))
+                 (else
+                  (let ((elapsed-ms (quotient (* (- now last-mouse-time) 1000)
+                                              internal-time-units-per-second)))
+                    (cond
+                     ((or (= last-mouse-time 0) (> elapsed-ms 16))
+                      (send eng msg) (drain now))
+                     (else (drain last-mouse-time)))))))))))))))
 
 (define (find-click-region regions x y)
   "Return the topmost (last-added) click region in REGIONS whose
@@ -464,10 +466,6 @@ poll."
   "Return #t if sub-cell C has been cancelled."
   (car c))
 
-;; The widget whose `update` is currently running, set by
-;; dispatch-update! so install-sub! can tag the resulting subscription
-;; with its owner.  When `update` returns, ownership goes back to #f
-;; (no owner — anonymous sub).
 (define %current-update-widget (make-parameter #f))
 
 (define (install-sub! eng id kind fiber-body)
@@ -675,9 +673,6 @@ Routing policy:
    ((resize-flushed? msg)
     (handle-resize! eng (cdr msg)) #t)
    ((resize? msg)
-    ;; SIGWINCH path: the signal handler runs send eng to enqueue a
-    ;; <resize>.  Re-route onto the debounce channel so drag-resize
-    ;; bursts coalesce to one flushed resize per burst.
     (put-message (engine-resize-channel eng) msg)
     #f)
    ((mouse-left-press? msg)
@@ -952,8 +947,7 @@ session server) owns those."
   ;; Send <init> first so root react can return startup cmds (timers,
   ;; subscriptions, etc.) before any user input arrives. Then a resize
   ;; with the current backend size so the first render lays out
-  ;; correctly.  Bootstrap resize bypasses the debounce — the first
-  ;; frame needs real dimensions before anything else can render.
+  ;; correctly.
   (send eng (make <init>))
   (let ((sz (backend-size (engine-backend eng))))
     (send eng (cons 'resize-flushed
@@ -1002,12 +996,11 @@ backend, plus log-overlay config."
             (setup-signal-handlers do-cleanup)
             (setup-resize-handler
              (lambda ()
-               ;; SIGWINCH → read size via TIOCGWINSZ and queue a
-               ;; <resize> through the normal msg path (send eng).
-               ;; process-one then puts it on resize-channel where
-               ;; the debounce fiber sees it.  put-message can't run
-               ;; here directly — it suspends on an unbuffered
-               ;; channel, and Guile signal handlers must not block.
+               ;; Goes through send eng (mutex + pipe-write, signal-safe)
+               ;; rather than put-message on resize-channel directly:
+               ;; put-message suspends on unbuffered channels, and Guile
+               ;; signal handlers must not block.  process-one forwards
+               ;; the <resize> onto the channel where debounce sees it.
                (catch #t
                  (lambda ()
                    (let ((sz (get-terminal-size)))

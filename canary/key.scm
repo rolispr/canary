@@ -37,7 +37,7 @@ compare equal."
 
 (define (key sym . mods)
   "Return a fresh <key> with symbol SYM and modifiers MODS.  MODS
-are canonicalised; aliases (ctrl, meta, cmd, …) accepted."
+are canonicalised; aliases (ctrl, option, cmd) accepted."
   (make <key> #:sym sym #:mods (canon-mods mods)))
 
 (define (key=? a b)

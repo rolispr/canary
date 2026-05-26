@@ -161,11 +161,6 @@
   (make <resume>))
 
 
-;; Bracketed paste payload, delivered as one event with the raw pasted
-;; bytes intact (newlines, control chars, anything).  The engine
-;; cascades it like other broadcast events; widgets that care (text
-;; inputs, editors) match on <paste> and consume `paste-text`.
-
 (define-class <paste> ()
   (text #:init-keyword #:text #:accessor paste-text))
 
@@ -177,12 +172,6 @@
   "Return a fresh <paste> event carrying the raw pasted string TEXT."
   (make <paste> #:text text))
 
-
-;; <mount> / <unmount> — lifecycle events the engine dispatches when a
-;; widget first appears in the view tree or disappears from it.  Used
-;; by widgets to install subscriptions tied to their visible lifetime;
-;; subs installed during <mount> are auto-cancelled by the engine on
-;; <unmount>.
 
 (define-class <mount> ())
 
