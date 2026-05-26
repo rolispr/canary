@@ -9,7 +9,7 @@ a node. A file browser is a node. Your whole app is a node. Nodes nest
 in other nodes; the engine walks one tree.
 
 Stateful nodes mutate themselves in place, returning cmds when they
-want the engine to do something — start a timer, swap palettes, quit.
+want the engine to do something: start a timer, swap palettes, quit.
 
 Color is by name. `#:fg 'accent` reads from the active palette;
 `(cycle-palette)` flips palettes and every reference recolors at once.
@@ -48,8 +48,8 @@ That's everything. A class for state, methods for `view` and
 Two generics drive every node:
 
 ```
-view   : (lambda (self)     → node)
-update : (lambda (self msg) → (values self cmd-or-#f))   ; optional
+view   : (lambda (self)     -> node)
+update : (lambda (self msg) -> (values self cmd-or-#f))   ; optional
 ```
 
 Specialise them on your class. Startup logic is just `update`
@@ -60,14 +60,14 @@ specialised on the `<init>` msg:
   (values c (load-cmd c)))           ; same (model, cmd) shape as every update
 ```
 
-No `sz` arg. Size is a renderer concern — the layout primitives
-(`flex`, `align`, `wrap`, `width`, `height`, `boxed`, `pad`, …) carry
+No `sz` arg. Size is a renderer concern. The layout primitives
+(`flex`, `align`, `wrap`, `width`, `height`, `boxed`, `pad`, ...) carry
 size-dependent behaviour through to render time. Author code composes
 the tree; the renderer interprets it in whatever rect it's given.
 
 When an app genuinely needs to know terminal cols/rows (e.g.
 size-dependent animation), it captures them from the `<resize>` msg
-into its own slots and reads from there — same `(model, cmd)` shape:
+into its own slots and reads from there. Same `(model, cmd)` shape:
 
 ```scheme
 (define-class <my-app> ()
@@ -83,7 +83,7 @@ into its own slots and reads from there — same `(model, cmd)` shape:
 
 Layout records (`txt`, `vbox`, `hbox`, `boxed`, `pad`, `align`,
 `width`, `height`, `overlay`, `pin`, `on-click`, `on-hover`, `flex`,
-`wrap`) are pure data — no methods, no state. The renderer walks them
+`wrap`) are pure data: no methods, no state. The renderer walks them
 by type-check. When it reaches a widget in the tree, it calls
 `(view instance)` to expand.
 
@@ -99,12 +99,12 @@ The engine:
 - spawns fibers for cmds that need them (`every`, `after`, user thunks)
 
 `run-app` takes any widget and config kwargs. No `<app>` base
-class to subclass — your class inherits from whatever you want, or
+class to subclass; your class inherits from whatever you want, or
 nothing.
 
 ### Composition
 
-`view` returns a tree of nodes — layout records and widgets
+`view` returns a tree of nodes: layout records and widgets
 mixed freely. **Embed widgets by instance reference, never by
 expanding them via `(view body)` in your own view.** The renderer
 calls `view` on a widget for you; the cascade walks the tree
@@ -119,7 +119,7 @@ takes a node also takes a widget.
 
 (define-method (view (c <chat>))
   (vbox (apply vbox (map (lambda (l) (txt l)) (chat-lines c)))
-        (chat-input c)))                ; ← the <textinput>, not (view it)
+        (chat-input c)))                ; <- the <textinput>, not (view it)
 ```
 
 Nest as deep as you want:
@@ -150,8 +150,8 @@ it during cascade.
 
 ### Focus
 
-Key and mouse msgs are routed to the **focus chain** — a path of
-widgets from root to the currently focused widget — not
+Key and mouse msgs are routed to the **focus chain**: a path of
+widgets from root to the currently focused widget, not
 broadcast to every widget. This stops two `<textinput>`s in the same
 tree from both consuming a typed character.
 
@@ -159,14 +159,14 @@ Default focus is the root widget. Move focus with the `focus` cmd:
 
 ```scheme
 (define-method (update (c <chat>) (msg <init>))
-  (values c (focus (chat-input c))))    ; ← input gets keys from the first frame
+  (values c (focus (chat-input c))))    ; <- input gets keys from the first frame
 ```
 
-The chain is `root → … → target`, resolved by the engine walking the
+The chain is `root -> ... -> target`, resolved by the engine walking the
 source tree. Keys / mouse msgs are dispatched **leaf-to-root**: the
 deepest focused widget gets the first crack, then each ancestor up
 the chain, so a textinput can insert a char and chat above it can
-still see enter and append a line — both fire in order:
+still see enter and append a line; both fire in order:
 
 ```scheme
 (define-method (update (c <chat>) (msg <key>))
@@ -179,14 +179,14 @@ still see enter and append a line — both fire in order:
   (values c #f))
 ```
 
-No "consumed, stop" sentinel — every node in the chain fires for
+No "consumed, stop" sentinel; every node in the chain fires for
 every key/mouse msg. Compose by ordering state mutations across
 update methods.
 
 Non-key/mouse msgs (`<init>`, `<tick>`, `<resize>`, `<paste>`,
 `<mount>`, `<unmount>`, focus/blur, keymap-mapped actions like
 `'save`, `on-click` action symbols, user msgs sent via `send`) still
-**broadcast** through the whole tree — that's the right shape for
+**broadcast** through the whole tree, which is the right shape for
 "tick all animations" or "everyone gets init" or "any widget can
 react to 'save." A `<paste>` rides the same broadcast; the focused
 text input picks it up by matching on the class, no special routing.
@@ -208,7 +208,7 @@ again.
   (values s (every #:hz 10 #:id (list 'spinner-tick s) (lambda () (tick)))))
 
 (define-method (update (s <spinner>) (msg <unmount>))
-  ;; Nothing to do — the sub is reaped for us.  Override if there's
+  ;; Nothing to do; the sub is reaped for us.  Override if there's
   ;; non-engine cleanup the widget needs.
   (values s #f))
 ```
@@ -219,9 +219,9 @@ cancels the sub automatically; no need for a parallel
 `<load-start>`/`<load-done>` toggle.
 
 Subscriptions without `#:id` are anonymous and live until the engine
-stops — no cancel handle, no owner tag. Re-issuing the same `(every
-#:id k …)` is idempotent: the engine only spawns once. The id is any
-`eq?`-comparable Scheme value — a symbol, a widget instance, a
+stops: no cancel handle, no owner tag. Re-issuing the same `(every
+#:id k ...)` is idempotent: the engine only spawns once. The id is any
+`eq?`-comparable Scheme value: a symbol, a widget instance, a
 `(list 'tick widget)` pair for per-instance ids.
 
 ## Live coding
@@ -232,10 +232,10 @@ make repl
 
 opens a Geiser-listenable image. From an Emacs/VS Code Geiser session:
 
-- `C-M-x` on a `(define-method (view (c <counter>)) …)` form
+- `C-M-x` on a `(define-method (view (c <counter>)) ...)` form
   replaces the method body. Existing instances dispatch to the new
   body on the next render.
-- `C-M-x` on a `(define-class <counter> () …)` form triggers Guile's
+- `C-M-x` on a `(define-class <counter> () ...)` form triggers Guile's
   class-redefinition protocol. Existing instances migrate to the new
   slot layout.
 - `(set! (counter-n c) 99)` from the REPL mutates a slot directly.
@@ -261,13 +261,13 @@ Engine-emitted records matched in `update`.
 | `<blur>`   | terminal lost focus  (msg ctor: `(blurred)`)  |
 | `<resume>` | engine reacquired tty after suspend           |
 | symbol     | keymap action; `on-click` action; user msg    |
-| list       | any user-defined shape via `(send eng …)`     |
+| list       | any user-defined shape via `(send eng ...)`     |
 
 Multi-method dispatch on the msg class is the natural shape:
 
 ```scheme
-(define-method (update (c <my>) (msg <tick>)) …)
-(define-method (update (c <my>) (msg <key>))  …)
+(define-method (update (c <my>) (msg <tick>)) ...)
+(define-method (update (c <my>) (msg <key>))  ...)
 (define-method (update (c <my>) msg) (values c #f))   ; catch-all
 ```
 
@@ -280,18 +280,18 @@ not quoted literals.
 |-------------------------------------|-----------------------------------------|
 | `#f`                                | no-op                                   |
 | `'quit`                             | exit `run-app`                          |
-| `(batch c1 c2 …)`                   | parallel                                |
-| `(sequence c1 c2 …)`                | sequential, awaits each                 |
-| `(every #:hz N [#:id k] producer)`  | persistent ticker — one fiber; cancel with `(cancel k)` |
+| `(batch c1 c2 ...)`                   | parallel                                |
+| `(sequence c1 c2 ...)`                | sequential, awaits each                 |
+| `(every #:hz N [#:id k] producer)`  | persistent ticker: one fiber; cancel with `(cancel k)` |
 | `(every #:ms N [#:id k] producer)`  | same                                    |
 | `(after #:ms N [#:id k] producer)`  | one-shot timer; cancel with `(cancel k)` before it fires |
 | `(cancel id)`                       | stop a sub installed with that `#:id`   |
-| `(println "string" …)`              | line to scrollback above alt-screen     |
+| `(println "string" ...)`              | line to scrollback above alt-screen     |
 | `(set-title "name")`                | runtime OS title change                 |
 | `(clear-screen)`                    | force full repaint                      |
-| `(cursor 'hidden│'visible│'bar│…)`  | runtime cursor change                   |
-| `(alt-screen 'on│'off)`             | runtime alt-screen toggle               |
-| `(mouse-mode 'off│'click│'cell│'all)` | runtime mouse mode change             |
+| `(cursor 'hidden|'visible|'bar|...)`  | runtime cursor change                   |
+| `(alt-screen 'on|'off)`             | runtime alt-screen toggle               |
+| `(mouse-mode 'off|'click|'cell|'all)` | runtime mouse mode change             |
 | `(set-palette 'name)`               | switch active palette                   |
 | `(cycle-palette)`                   | next palette in theme's declared order  |
 | `(suspend)`                         | hand tty to shell, resume on SIGCONT    |
@@ -308,7 +308,7 @@ not quoted literals.
 
 `on-click` wraps any body so a left-press inside its rendered area
 dispatches `action` as a msg. `on-hover` swaps `body` for
-`(styler-proc body)` whenever the cursor is inside the area — purely
+`(styler-proc body)` whenever the cursor is inside the area; purely
 visual.
 
 ```scheme
@@ -321,15 +321,15 @@ visual.
 
 ```scheme
 (keymap
- (bind k1 [k2 …] action [#:timeout-ms N])
- …)
+ (bind k1 [k2 ...] action [#:timeout-ms N])
+ ...)
 ```
 
 | form                                    | meaning                    |
 |-----------------------------------------|----------------------------|
 | `#\h`, `#\?`, `#\:`                     | literal char               |
 | `#\tab` `#\escape` `#\space` `#\return` `#\delete` `#\backspace` | named chars |
-| `'left` `'right` `'up` `'down` `'home` `'end` `'pgup` `'pgdn` `'f1`…`'f12` | symbols |
+| `'left` `'right` `'up` `'down` `'home` `'end` `'pgup` `'pgdn` `'f1`...`'f12` | symbols |
 | `'(#\x ctrl)` `'(left ctrl)`            | modifier list              |
 | `'(mouse left)` `'(mouse right)`        | mouse button               |
 | `'(mouse-scroll up)` `'(mouse-scroll down)` | scroll wheel           |
@@ -396,8 +396,8 @@ For reusable styling combos, define a helper:
 
 Styling kwargs on `txt`:
 
-- `#:fg` / `#:bg` — hex string (`"#abc123"`) or palette name (`'accent`)
-- `#:bold` `#:italic` `#:underline` `#:reverse` `#:strike` `#:dim` —
+- `#:fg` / `#:bg`: hex string (`"#abc123"`) or palette name (`'accent`)
+- `#:bold` `#:italic` `#:underline` `#:reverse` `#:strike` `#:dim`:
   individual boolean flags.
 
 Containers:
@@ -407,15 +407,15 @@ Containers:
 (hbox a b c)
 (spacer n)                                ; height in vbox
 (spacer #:w n)                            ; width  in hbox
-(pad    body  #:top n #:left n …)         ; inner whitespace
-(margin body  #:top n #:left n …)         ; outer whitespace
-(align  body  #:h 'left│'center│'right #:v 'top│'middle│'bottom
+(pad    body  #:top n #:left n ...)         ; inner whitespace
+(margin body  #:top n #:left n ...)         ; outer whitespace
+(align  body  #:h 'left|'center|'right #:v 'top|'middle|'bottom
               #:width n #:height n)        ; positions body within its rect
 (width  body  n)
-(height body  n #:valign 'top│'center│'bottom)
+(height body  n #:valign 'top|'center|'bottom)
 (fill   w h #:bg 'name-or-hex)
 (pin    col row body)
-(overlay base p1 p2 …)
+(overlay base p1 p2 ...)
 (boxed  body  #:border border-rounded #:fg 'name #:title "name")
 (static body)                            ; cache rendered cmds keyed on rect
 (on-click action body)
@@ -435,7 +435,7 @@ each axis:
 - horizontal: `'left` (default), `'center`, `'right`
 - vertical: `'top` (default), `'middle`, `'bottom`
 
-Pass either via kwargs (`#:h`, `#:v`) or positionally — the modes
+Pass either via kwargs (`#:h`, `#:v`) or positionally; the modes
 self-classify, so `(align body 'center)` is horizontal-center,
 `(align body 'middle)` is vertical-middle, `(align body 'center
 'middle)` is centered on both axes. `#:width` / `#:height` pin the
@@ -444,14 +444,14 @@ dimension on that axis.
 
 When the node overflows the slot, the anchored edge stays inside
 the rect and the opposite edge clips. `(align body #:v 'bottom)`
-with a vbox of 1000 lines in a 24-row rect shows the last 24 lines
-— the top of the vbox renders off the rect and the term grid drops
+with a vbox of 1000 lines in a 24-row rect shows the last 24 lines;
+the top of the vbox renders off the rect and the term grid drops
 out-of-range writes. Same on the horizontal axis with `#:h 'right`.
 Use this for chat-style tail-anchoring, right-aligned status, or
-centered-overflow content — no magic numbers, no size-state needed.
+centered-overflow content: no magic numbers, no size-state needed.
 
 ```scheme
-(align (vbox banner subtitle …) #:h 'center #:v 'middle)   ; splash
+(align (vbox banner subtitle ...) #:h 'center #:v 'middle)   ; splash
 (align history-vbox #:v 'bottom)                            ; chat tail
 (align timestamp #:h 'right)                                ; status
 ```
@@ -475,7 +475,7 @@ is transparent.
       (flex preview #:grow 2))            ; canvas 1/3, preview 2/3
 ```
 
-Defaults: `#:grow 1 #:shrink 0` → "take any extra, don't shrink past
+Defaults: `#:grow 1 #:shrink 0` -> "take any extra, don't shrink past
 intrinsic". A bare `(flex x)` is the common case.
 
 Don't subtract terminal dimensions to size items by hand
@@ -489,50 +489,50 @@ on overflow), `wrap` re-flows its string to the rendered rect's width
 on each frame. Newlines in the input become paragraph breaks.
 
 ```scheme
-(flex (wrap "Long preview text that re-flows when the pane resizes…"
+(flex (wrap "Long preview text that re-flows when the pane resizes..."
             #:fg 'muted))
 ```
 
-`wrap` reports intrinsic `(1, 1)` — it's a fill widget. Outside a
+`wrap` reports intrinsic `(1, 1)`: it's a fill widget. Outside a
 `flex` it shrinks to one cell. The author decides how much room to
-give it by wrapping in `flex` (or `(width …)` / `(height …)`).
+give it by wrapping in `flex` (or `(width ...)` / `(height ...)`).
 
 ## Bundled components
 
 Plain widget classes in `canary/components/`:
 
-- `<button>` — title + on-click
-- `<panel>`  — title + border + footer + content, with hover affordance
-- `<textinput>` — single-line input with cursor
-- `<spinner>` — animated frames, installs its own ticker on `<mount>`
-- `<progress>` — bar with percentage
-- `<paginator>` — page indicator with key bindings
-- `<viewport>` — scrollable list of items with optional tail-mode auto-follow
+- `<button>`: title + on-click
+- `<panel>`: title + border + footer + content, with hover affordance
+- `<textinput>`: single-line input with cursor
+- `<spinner>`: animated frames, installs its own ticker on `<mount>`
+- `<progress>`: bar with percentage
+- `<paginator>`: page indicator with key bindings
+- `<viewport>`: scrollable list of items with optional tail-mode auto-follow
 
-Each exposes a bare-named constructor (`(button #:label …)`,
-`(spinner)`, `(textinput #:prompt …)`, etc.) and a small set of
+Each exposes a bare-named constructor (`(button #:label ...)`,
+`(spinner)`, `(textinput #:prompt ...)`, etc.) and a small set of
 `X-field` accessors.  Embed an instance as a slot on your app class;
 the engine cascades msgs into it automatically.
 
 Naming is uniform across the whole library: `<thing>` is the class
 or record type, `thing` is the constructor, `thing?` is the
 predicate, `thing-field` is the accessor.  No `make-` prefix on any
-user-facing constructor — applies to engine plumbing (`(engine
-#:backend …)`, `(ansi-backend #:port …)`) and spring helpers
-(`(spring-animation …)`, `(spring-bouncy)`) too.
+user-facing constructor. Applies to engine plumbing (`(engine
+#:backend ...)`, `(ansi-backend #:port ...)`) and spring helpers
+(`(spring-animation ...)`, `(spring-bouncy)`) too.
 
 ## Anti-patterns
 
 - **Don't** return new state from `update`. Mutate in place with the
   accessors, return `(values self cmd)`.
-- **Don't** construct cmds as quoted lists: `'(set-title "x")` ✗,
-  `(set-title "x")` ✓.
-- **Don't** put style flags in a list: `#:attrs '(bold italic)` ✗,
-  `#:bold #:italic` ✓.
+- **Don't** construct cmds as quoted lists: `'(set-title "x")` NO,
+  `(set-title "x")` OK.
+- **Don't** put style flags in a list: `#:attrs '(bold italic)` NO,
+  `#:bold #:italic` OK.
 - **Don't** poll for state changes. Every transition is a msg; every
   side-effect is a cmd.
 - **Don't** issue `(alt-screen 'on)` / `(cursor 'hide)` / `(set-title
-  …)` from your `<init>` update for the defaults. Pass them as kwargs
+  ...)` from your `<init>` update for the defaults. Pass them as kwargs
   to `run-app`.
 - **Don't** side-effect inside `view`. The cascade walker calls it
   once to find items before render calls it again to produce
@@ -551,7 +551,7 @@ restores them in reverse order:
 | `\e[?2004h`    | bracketed paste (`<paste>` with `paste-text`)     |
 | `\e[>5u`       | kitty keyboard protocol, flags 1+4 (disambiguate + alternate keys) |
 
-Each frame's cell diff is bracketed by `\e[?2026h` … `\e[?2026l`
+Each frame's cell diff is bracketed by `\e[?2026h` ... `\e[?2026l`
 (synchronized output), so terminals that honour it never paint a
 half-written frame.
 
@@ -566,7 +566,7 @@ when the terminal doesn't speak the protocol.
 (use-modules (canary))
 ```
 
-Re-exports the public surface — `view`, `update` generics,
+Re-exports the public surface: `view`, `update` generics,
 layout primitives, theme/palette forms, keymap helpers, msg + cmd
 constructors, `run-app`, `send`, `<key>` / `<mouse>` / `<tick>` etc.
 See `canary.scm` for the full list.
