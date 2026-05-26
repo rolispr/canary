@@ -21,8 +21,8 @@
              (not (resize-flushed? (cons 'other (resize 80 24)))))
 
 (test-group "handle-resize! caches new dims on backend"
-  (let* ((b   (make-ansi-backend #:port (open-output-string)))
-         (eng (make-engine #:backend b #:root (txt "hi")
+  (let* ((b   (ansi-backend #:port (open-output-string)))
+         (eng (engine #:backend b #:root (txt "hi")
                            #:msg-bell       (cons (open-input-string "") (open-output-string))
                            #:stop-ch        (cons (open-input-string "") (open-output-string))
                            #:resize-channel (make-channel))))

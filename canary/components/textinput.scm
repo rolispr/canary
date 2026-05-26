@@ -7,7 +7,7 @@
   #:use-module (oop goops)
   #:export (<textinput>
             textinput?
-            make-textinput
+            textinput
             textinput-value
             textinput-cursor
             textinput-placeholder
@@ -36,7 +36,7 @@
   "Return #t if X is a <textinput>."
   (is-a? x <textinput>))
 
-(define (make-textinput . args)
+(define (textinput . args)
   "Return a fresh <textinput> initialised from ARGS, a sequence of
 #:value, #:cursor, #:placeholder, #:prompt, #:width, #:char-limit,
 #:focused? keyword arguments."

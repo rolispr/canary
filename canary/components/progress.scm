@@ -4,7 +4,7 @@
   #:use-module (oop goops)
   #:export (<progress>
             progress?
-            make-progress
+            progress
             progress-current
             progress-total
             progress-width
@@ -31,7 +31,7 @@
   "Return #t if X is a <progress>."
   (is-a? x <progress>))
 
-(define (make-progress . args)
+(define (progress . args)
   "Return a fresh <progress> initialised from ARGS, a sequence of
 #:current, #:total, #:width, #:show-percent?, #:filled-face,
 #:empty-face keyword arguments."

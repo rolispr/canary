@@ -969,10 +969,10 @@ session server) owns those."
   "Run an app rooted at ROOT (a widget with a `view' method).
 Kwargs: title, keymap, theme, mouse, cursor, alt-screen?, filter,
 backend, plus log-overlay config."
-  (let* ((b (or backend (make-ansi-backend #:theme (or theme default-theme))))
+  (let* ((b (or backend (ansi-backend #:theme (or theme default-theme))))
          (th (or theme default-theme))
          (km (or keymap (keymap)))
-         (eng (make-engine #:backend b #:theme th #:keymap km #:title title
+         (eng (engine #:backend b #:theme th #:keymap km #:title title
                            #:mouse-mode mouse #:cursor cursor
                            #:alt-screen? alt-screen? #:filter filter #:root root
                            #:msg-bell       (make-bell-pipe)

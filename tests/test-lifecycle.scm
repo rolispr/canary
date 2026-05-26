@@ -29,9 +29,9 @@
   (any unmount? (tape-msgs t)))
 
 (define (make-test-engine root)
-  (let ((b (make-ansi-backend #:port (open-output-string))))
+  (let ((b (ansi-backend #:port (open-output-string))))
     (set! (ansi-backend-size b) (size 20 10))
-    (make-engine #:backend b #:root root
+    (engine #:backend b #:root root
                  #:msg-bell       (cons (open-input-string "") (open-output-string))
                  #:stop-ch        (cons (open-input-string "") (open-output-string))
                  #:resize-channel (make-channel))))

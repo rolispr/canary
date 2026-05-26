@@ -8,7 +8,7 @@
   #:use-module (srfi srfi-1)
   #:export (<paginator>
             paginator?
-            make-paginator
+            paginator
             paginator-type
             paginator-page
             paginator-per-page
@@ -39,7 +39,7 @@
   "Return #t if X is a <paginator>."
   (is-a? x <paginator>))
 
-(define (make-paginator . args)
+(define (paginator . args)
   "Return a fresh <paginator> initialised from ARGS, a sequence of
 #:type, #:page, #:per-page, #:total-pages, #:active-dot,
 #:inactive-dot, #:arabic-format keyword arguments."

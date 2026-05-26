@@ -135,12 +135,12 @@
 (define-class <tweet> ()
   (frame #:init-value 0   #:accessor tweet-frame)
   (notes #:init-value '() #:accessor tweet-notes)
-  (input #:init-form (make-textinput #:prompt "♪ "
-                                     #:placeholder "type to sing"
-                                     #:width 40
-                                     #:focused? #t)
+  (input #:init-form (textinput #:prompt "♪ "
+                                #:placeholder "type to sing"
+                                #:width 40
+                                #:focused? #t)
          #:accessor tweet-input)
-  (spin  #:init-form (make-spinner)
+  (spin  #:init-form (spinner)
          #:accessor tweet-spin))
 
 (define app-theme

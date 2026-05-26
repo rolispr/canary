@@ -5,7 +5,7 @@
   #:use-module (oop goops)
   #:export (<button>
             button?
-            make-button
+            button
             button-label
             button-action
             button-face
@@ -31,7 +31,7 @@
   "Return #t if X is a <button>."
   (is-a? x <button>))
 
-(define (make-button . args)
+(define (button . args)
   "Return a fresh <button> initialised from ARGS, a sequence of
 #:label, #:action, #:face, #:focused-face, #:focused?, #:border
 keyword arguments."

@@ -7,7 +7,7 @@
   #:use-module (srfi srfi-1)
   #:export (<viewport>
             viewport?
-            make-viewport
+            viewport
             viewport-items
             viewport-offset
             viewport-step
@@ -25,7 +25,7 @@
 
 (define (viewport? x) (is-a? x <viewport>))
 
-(define (make-viewport . args) (apply make <viewport> args))
+(define (viewport . args) (apply make <viewport> args))
 
 (define (viewport-scroll-up! v)
   (let ((n (length (viewport-items v)))

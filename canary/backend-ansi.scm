@@ -16,7 +16,7 @@
   #:use-module (srfi srfi-1)
   #:use-module ((srfi srfi-13) #:select (string-contains string-index))
   #:export (<ansi-backend>
-            make-ansi-backend
+            ansi-backend
             ansi-backend-theme
             set-ansi-backend-theme!
             ansi-backend-port
@@ -60,7 +60,7 @@
   "Replace the theme on backend B with TH."
   (set! (ansi-backend-theme b) th))
 
-(define* (make-ansi-backend #:key (port (current-output-port))
+(define* (ansi-backend #:key (port (current-output-port))
                             (theme default-theme))
   "Return a fresh <ansi-backend> writing to PORT (defaults to
 current-output-port) under THEME (defaults to default-theme)."

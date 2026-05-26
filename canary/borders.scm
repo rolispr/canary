@@ -4,7 +4,7 @@
   #:use-module (srfi srfi-9)
   #:export (<border>
             border?
-            make-border
+            border
             border-top
             border-bottom
             border-left
@@ -21,7 +21,7 @@
             boxed))
 
 (define-record-type <border>
-  (make-border top bottom left right tl tr bl br)
+  (border top bottom left right tl tr bl br)
   border?
   (top border-top)
   (bottom border-bottom)
@@ -33,19 +33,19 @@
   (br border-br))
 
 (define border-normal
-  (make-border "─" "─" "│" "│" "┌" "┐" "└" "┘"))
+  (border "─" "─" "│" "│" "┌" "┐" "└" "┘"))
 
 (define border-rounded
-  (make-border "─" "─" "│" "│" "╭" "╮" "╰" "╯"))
+  (border "─" "─" "│" "│" "╭" "╮" "╰" "╯"))
 
 (define border-thick
-  (make-border "━" "━" "┃" "┃" "┏" "┓" "┗" "┛"))
+  (border "━" "━" "┃" "┃" "┏" "┓" "┗" "┛"))
 
 (define border-double
-  (make-border "═" "═" "║" "║" "╔" "╗" "╚" "╝"))
+  (border "═" "═" "║" "║" "╔" "╗" "╚" "╝"))
 
 (define border-ascii
-  (make-border "-" "-" "|" "|" "+" "+" "+" "+"))
+  (border "-" "-" "|" "|" "+" "+" "+" "+"))
 
 (define* (boxed body #:key (border border-normal) (fg #f) (bg #f)
                 (title #f))

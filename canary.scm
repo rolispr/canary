@@ -17,12 +17,12 @@
    <log-entry> log-entry? log-entry-time log-entry-source
    log-entry-level log-entry-text engine-log!
 
-   <ansi-backend> make-ansi-backend
+   <ansi-backend> ansi-backend
    graphics? cell-w cell-h
    stats reset-stats!
 
-   make-spring-animation spring-update
-   make-spring-smooth make-spring-bouncy make-spring-gentle make-spring-snappy
+   spring-animation spring-update
+   spring-smooth spring-bouncy spring-gentle spring-snappy
    fps
 
    <key> key key? key-sym key-mods key-event key=? key->string
@@ -39,7 +39,7 @@
    txt vbox hbox spacer join pad margin align width height fill
    place-cursor pin overlay static image on-click on-hover flex wrap
 
-   <border> border? border-normal border-rounded border-thick
+   <border> border border? border-normal border-rounded border-thick
    border-double border-ascii boxed
 
    images define-image! image-registered? image-path image-bytes

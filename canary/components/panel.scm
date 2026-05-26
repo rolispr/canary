@@ -5,7 +5,7 @@
   #:use-module (oop goops)
   #:export (<panel>
             panel?
-            make-panel
+            panel
             panel-title
             panel-footer
             panel-border
@@ -34,7 +34,7 @@
   "Return #t if X is a <panel>."
   (is-a? x <panel>))
 
-(define (make-panel . args)
+(define (panel . args)
   "Return a fresh <panel> initialised from ARGS, a sequence of
 #:title, #:footer, #:border, #:face, #:hover-face, #:hover-border,
 #:content keyword arguments."

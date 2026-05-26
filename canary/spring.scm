@@ -5,12 +5,12 @@
 
 (define-module (canary spring)
   #:use-module (srfi srfi-9)
-  #:export (make-spring-animation
+  #:export (spring-animation
             spring-update
-            make-spring-smooth
-            make-spring-bouncy
-            make-spring-gentle
-            make-spring-snappy
+            spring-smooth
+            spring-bouncy
+            spring-gentle
+            spring-snappy
             fps))
 
 (define epsilon 1.0e-8)
@@ -27,7 +27,7 @@
   "Convert frames per second to time delta"
   (/ 1.0 (exact->inexact n)))
 
-(define (make-spring-animation delta-time angular-frequency damping-ratio)
+(define (spring-animation delta-time angular-frequency damping-ratio)
   "Create spring with precomputed coefficients.
 
    DELTA-TIME: Time step (use fps helper or provide seconds per frame)
@@ -118,18 +118,18 @@
 
 ;;; Convenience presets
 
-(define* (make-spring-smooth #:optional (frame-rate 60))
+(define* (spring-smooth #:optional (frame-rate 60))
   "Smooth, critically-damped spring (no overshoot)"
-  (make-spring-animation (fps frame-rate) 6.0 1.0))
+  (spring-animation (fps frame-rate) 6.0 1.0))
 
-(define* (make-spring-bouncy #:optional (frame-rate 60))
+(define* (spring-bouncy #:optional (frame-rate 60))
   "Bouncy, under-damped spring (overshoots)"
-  (make-spring-animation (fps frame-rate) 6.0 0.5))
+  (spring-animation (fps frame-rate) 6.0 0.5))
 
-(define* (make-spring-gentle #:optional (frame-rate 60))
+(define* (spring-gentle #:optional (frame-rate 60))
   "Gentle, over-damped spring (slow, no overshoot)"
-  (make-spring-animation (fps frame-rate) 3.0 1.5))
+  (spring-animation (fps frame-rate) 3.0 1.5))
 
-(define* (make-spring-snappy #:optional (frame-rate 60))
+(define* (spring-snappy #:optional (frame-rate 60))
   "Snappy, responsive spring"
-  (make-spring-animation (fps frame-rate) 10.0 0.8))
+  (spring-animation (fps frame-rate) 10.0 0.8))

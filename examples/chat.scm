@@ -33,12 +33,12 @@
 (define (random-element xs) (list-ref xs (random (length xs))))
 
 (define-class <chat> ()
-  (history  #:init-form (make-viewport #:step 1 #:from 'bottom)
+  (history  #:init-form (viewport #:step 1 #:from 'bottom)
             #:accessor chat-history)
-  (input    #:init-form (make-textinput #:prompt "> "
-                                        #:placeholder "say something"
-                                        #:width 60
-                                        #:focused? #t)
+  (input    #:init-form (textinput #:prompt "> "
+                                   #:placeholder "say something"
+                                   #:width 60
+                                   #:focused? #t)
             #:accessor chat-input)
   (focus-on #:init-value 'input  #:accessor chat-focus-on))
 

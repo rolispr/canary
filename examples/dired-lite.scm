@@ -101,8 +101,8 @@
          (items (map (lambda (e i) (entry-line d i e))
                      es
                      (iota (length es))))
-         (vp (make-viewport #:items items
-                            #:offset (max 0 (- (dired-cursor d) 3))))
+         (vp (viewport #:items items
+                       #:offset (max 0 (- (dired-cursor d) 3))))
          (left
           (boxed vp
                  #:title (string-append " " (dired-path d) " ")

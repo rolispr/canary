@@ -5,7 +5,7 @@
   #:use-module (oop goops)
   #:export (<spinner>
             spinner?
-            make-spinner
+            spinner
             spinner-frame-idx
             spinner-face
             spinner-hz
@@ -36,7 +36,7 @@
   "Return #t if X is a <spinner>."
   (is-a? x <spinner>))
 
-(define (make-spinner . args)
+(define (spinner . args)
   "Return a fresh <spinner> initialised from ARGS, a sequence of
 #:frames, #:frame-idx, #:face, #:hz keyword arguments."
   (apply make <spinner> args))

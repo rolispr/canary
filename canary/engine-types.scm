@@ -2,7 +2,7 @@
   #:use-module (srfi srfi-9)
   #:use-module (ice-9 threads)
   #:export (<engine>
-            make-engine
+            engine
             engine?
             engine-backend     set-engine-backend!
             engine-theme       set-engine-theme!
@@ -74,7 +74,7 @@
   (live-widgets engine-live-widgets   set-engine-live-widgets!)
   (widget-subs  engine-widget-subs))
 
-(define* (make-engine #:key backend theme keymap title (mouse-mode 'off)
+(define* (engine #:key backend theme keymap title (mouse-mode 'off)
                       (cursor 'hidden) (alt-screen? #t) filter root
                       msg-bell stop-ch resize-channel
                       (log-cap 200) (show-log? #t) (log-height-frac 1/5))

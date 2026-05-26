@@ -115,7 +115,7 @@ takes a node also takes a widget.
 ```scheme
 (define-class <chat> ()
   (lines #:init-value '()             #:accessor chat-lines)
-  (input #:init-form (make-textinput) #:accessor chat-input))
+  (input #:init-form (textinput) #:accessor chat-input))
 
 (define-method (view (c <chat>))
   (vbox (apply vbox (map (lambda (l) (txt l)) (chat-lines c)))
@@ -126,9 +126,9 @@ Nest as deep as you want:
 
 ```scheme
 (vbox
- (boxed (make-dired #:path "/foo") #:title "left")
- (hbox  (align (make-spinner) 'center #:width 20)
-        (pad   (make-button #:label "ok" #:action 'save) #:left 2)
+ (boxed (dired #:path "/foo") #:title "left")
+ (hbox  (align (spinner) 'center #:width 20)
+        (pad   (button #:label "ok" #:action 'save) #:left 2)
         (width (chat-input app) 40)))
 ```
 
@@ -509,9 +509,17 @@ Plain widget classes in `canary/components/`:
 - `<paginator>` — page indicator with key bindings
 - `<viewport>` — scrollable list of items with optional tail-mode auto-follow
 
-Each exposes `make-X` as the constructor and a small set of accessors.
-Embed an instance as a slot on your app class; the engine cascades
-msgs into it automatically.
+Each exposes a bare-named constructor (`(button #:label …)`,
+`(spinner)`, `(textinput #:prompt …)`, etc.) and a small set of
+`X-field` accessors.  Embed an instance as a slot on your app class;
+the engine cascades msgs into it automatically.
+
+Naming is uniform across the whole library: `<thing>` is the class
+or record type, `thing` is the constructor, `thing?` is the
+predicate, `thing-field` is the accessor.  No `make-` prefix on any
+user-facing constructor — applies to engine plumbing (`(engine
+#:backend …)`, `(ansi-backend #:port …)`) and spring helpers
+(`(spring-animation …)`, `(spring-bouncy)`) too.
 
 ## Anti-patterns
 
