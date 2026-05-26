@@ -166,13 +166,18 @@ ioctl first, then falls back to `stty size`, then to 80x24."
           (let* ((port   (open-input-pipe "sh -c 'stty size < /dev/tty'"))
                  (output (read-line port)))
             (close-pipe port)
-            (if (eof-object? output)
-                (size 80 24)
-                (let ((parts (string-split output #\space)))
-                  (if (= 2 (length parts))
-                      (size (string->number (cadr parts))
-                            (string->number (car parts)))
-                      (size 80 24))))))
+            (cond
+             ((eof-object? output) (size 80 24))
+             (else
+              (let ((parts (string-split output #\space)))
+                (cond
+                 ((= 2 (length parts))
+                  (let ((r (string->number (car parts)))
+                        (c (string->number (cadr parts))))
+                    (if (and r c (positive? r) (positive? c))
+                        (size c r)
+                        (size 80 24))))
+                 (else (size 80 24))))))))
         (lambda _ (size 80 24)))))
 
 (define-syntax-rule (with-raw-terminal body ...)

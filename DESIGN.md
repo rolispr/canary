@@ -13,8 +13,47 @@ want the engine to do something: start a timer, swap palettes, quit.
 
 Color is by name. `#:fg 'accent` reads from the active palette;
 `(cycle-palette)` flips palettes and every reference recolors at once.
-Styling attributes are individual flags (`#:bold #:italic`), not a
-list.
+Styling attributes are individual flags: `#:bold`, `#:italic`,
+`#:underline`, `#:reverse`, `#:strike`, `#:dim`.
+
+## API
+
+```scheme
+(use-modules (canary))
+```
+
+Brings in:
+
+- `run-app`, `send`
+- Generics: `view`, `update`
+- Msg classes: `<key>`, `<mouse>`, `<tick>`, `<resize>`, `<init>`,
+  `<mount>`, `<unmount>`, `<paste>`, `<focus>`, `<blur>`, `<resume>`
+  (plus accessors: `key-sym`, `mouse-x`, `tick-n`, `resize-width`,
+  `paste-text`, ...)
+- Cmd constructors: `every`, `after`, `batch`, `sequence`, `focus`,
+  `cancel`, `set-title`, `cursor`, `alt-screen`, `mouse-mode`,
+  `clear-screen`, `println`, `suspend`, `exec`, `set-palette`,
+  `cycle-palette`
+- Layout: `txt`, `vbox`, `hbox`, `spacer`, `pad`, `margin`, `align`,
+  `width`, `height`, `fill`, `pin`, `overlay`, `boxed`, `static`,
+  `on-click`, `on-hover`, `flex`, `wrap`, `image`
+- Borders: `border-normal`, `border-rounded`, `border-thick`,
+  `border-double`, `border-ascii`
+- Theme: `theme`, `palette`, `theme-set!`, `theme-cycle!`,
+  `default-theme`
+- Keymap: `keymap`, `bind`
+- Backend: `<ansi-backend>`, `ansi-backend`, `graphics?`, `cell-w`,
+  `cell-h`
+
+Components live in separate modules and are imported individually:
+
+```scheme
+(use-modules (canary components panel)
+             (canary components textinput)
+             (canary components spinner))
+```
+
+The sections below cover each piece.
 
 ## Hello, counter
 
@@ -60,14 +99,13 @@ specialised on the `<init>` msg:
   (values c (load-cmd c)))           ; same (model, cmd) shape as every update
 ```
 
-No `sz` arg. Size is a renderer concern. The layout primitives
-(`flex`, `align`, `wrap`, `width`, `height`, `boxed`, `pad`, ...) carry
-size-dependent behaviour through to render time. Author code composes
-the tree; the renderer interprets it in whatever rect it's given.
+Layout primitives (`flex`, `align`, `wrap`, `width`, `height`,
+`boxed`, `pad`, ...) carry size-dependent behaviour through to render
+time. Author code composes the tree; the renderer interprets it in
+whatever rect it's given.
 
-When an app genuinely needs to know terminal cols/rows (e.g.
-size-dependent animation), it captures them from the `<resize>` msg
-into its own slots and reads from there. Same `(model, cmd)` shape:
+For size-dependent work (animation, viewport sizing), capture
+`<resize>` into a slot:
 
 ```scheme
 (define-class <my-app> ()
@@ -83,9 +121,9 @@ into its own slots and reads from there. Same `(model, cmd)` shape:
 
 Layout records (`txt`, `vbox`, `hbox`, `boxed`, `pad`, `align`,
 `width`, `height`, `overlay`, `pin`, `on-click`, `on-hover`, `flex`,
-`wrap`) are pure data: no methods, no state. The renderer walks them
-by type-check. When it reaches a widget in the tree, it calls
-`(view instance)` to expand.
+`wrap`) are pure data values composed into a tree. The renderer walks
+them by type-check. When it reaches a widget, it calls `(view widget)`
+to expand.
 
 The engine:
 
@@ -98,19 +136,15 @@ The engine:
   runs them
 - spawns fibers for cmds that need them (`every`, `after`, user thunks)
 
-`run-app` takes any widget and config kwargs. No `<app>` base
-class to subclass; your class inherits from whatever you want, or
-nothing.
+`run-app` takes any widget plus config kwargs.
 
 ### Composition
 
-`view` returns a tree of nodes: layout records and widgets
-mixed freely. **Embed widgets by instance reference, never by
-expanding them via `(view body)` in your own view.** The renderer
-calls `view` on a widget for you; the cascade walks the tree
-and dispatches `update` on every instance it finds. There is no
-container that "doesn't support widgets": every layout primitive that
-takes a node also takes a widget.
+`view` returns a tree of nodes: layout records and widgets composed
+freely. Embed widgets by reference. The renderer calls `view` on each
+widget during walk; the cascade dispatches `update` on every widget
+it finds. Every layout primitive accepts widgets and layout records
+interchangeably.
 
 ```scheme
 (define-class <chat> ()
@@ -138,35 +172,21 @@ returns `(values self cmd-or-#f)`. Widgets that don't care about a
 given msg fall through the default catch-all and return
 `(values self #f)`.
 
-#### Anti-pattern
-
-```scheme
-;; DON'T: cascade can't see the textinput through expanded layout records.
-(vbox (view (chat-input c)))
-```
-
-Use `(chat-input c)`. The engine expands it for rendering and visits
-it during cascade.
-
 ### Focus
 
-Key and mouse msgs are routed to the **focus chain**: a path of
-widgets from root to the currently focused widget, not
-broadcast to every widget. This stops two `<textinput>`s in the same
-tree from both consuming a typed character.
-
-Default focus is the root widget. Move focus with the `focus` cmd:
+Key and mouse msgs route to the **focus chain**: the path of widgets
+from root to the currently focused widget. Default focus is the root
+widget. Move focus with the `focus` cmd:
 
 ```scheme
 (define-method (update (c <chat>) (msg <init>))
   (values c (focus (chat-input c))))    ; <- input gets keys from the first frame
 ```
 
-The chain is `root -> ... -> target`, resolved by the engine walking the
-source tree. Keys / mouse msgs are dispatched **leaf-to-root**: the
-deepest focused widget gets the first crack, then each ancestor up
-the chain, so a textinput can insert a char and chat above it can
-still see enter and append a line; both fire in order:
+Keys and mouse msgs dispatch **leaf-to-root**: the focused widget
+fires first, then each ancestor. A `<textinput>` can insert a char
+while a `<chat>` above it appends the line on enter; both fire in
+order:
 
 ```scheme
 (define-method (update (c <chat>) (msg <key>))
@@ -179,69 +199,54 @@ still see enter and append a line; both fire in order:
   (values c #f))
 ```
 
-No "consumed, stop" sentinel; every node in the chain fires for
-every key/mouse msg. Compose by ordering state mutations across
-update methods.
+Every widget in the focus chain fires for every key/mouse msg.
+Compose by ordering state mutations across update methods.
 
 Non-key/mouse msgs (`<init>`, `<tick>`, `<resize>`, `<paste>`,
 `<mount>`, `<unmount>`, focus/blur, keymap-mapped actions like
-`'save`, `on-click` action symbols, user msgs sent via `send`) still
-**broadcast** through the whole tree, which is the right shape for
-"tick all animations" or "everyone gets init" or "any widget can
-react to 'save." A `<paste>` rides the same broadcast; the focused
-text input picks it up by matching on the class, no special routing.
+`'save`, `on-click` action symbols, user msgs sent via `send`)
+**broadcast** through the whole tree. Widgets dispatch on the msg
+class. Any widget that specialises `update` on `<paste>` receives the
+payload via `paste-text`.
 
 ### Widget lifecycle
 
-The engine tracks the set of widgets visible in the current frame
-and diffs it against the previous one. A widget that appears for the
-first time gets `<mount>`; a widget that leaves the tree gets
-`<unmount>`. `<init>` still fires once at startup (app-level boot
-hook); `<mount>` fires per widget on first appearance, then never
-again.
+A widget gets `<mount>` when it appears in the view tree, `<unmount>`
+when it leaves. `<init>` fires once per app at startup.
 
 ```scheme
 (define-method (update (s <spinner>) (msg <mount>))
-  ;; Install the tick subscription; the engine auto-cancels it on
-  ;; <unmount> because it was installed while this widget was the
-  ;; current dispatch target.
   (values s (every #:hz 10 #:id (list 'spinner-tick s) (lambda () (tick)))))
 
 (define-method (update (s <spinner>) (msg <unmount>))
-  ;; Nothing to do; the sub is reaped for us.  Override if there's
-  ;; non-engine cleanup the widget needs.
   (values s #f))
 ```
 
-Any `every`/`after` installed while a widget's `update` is on the
-stack is tagged with that widget. Removing the widget from the view
-cancels the sub automatically; no need for a parallel
-`<load-start>`/`<load-done>` toggle.
+`every` and `after` cmds installed during a widget's `update` are
+tagged with that widget. Removing the widget from the view cancels
+the sub.
 
-Subscriptions without `#:id` are anonymous and live until the engine
-stops: no cancel handle, no owner tag. Re-issuing the same `(every
-#:id k ...)` is idempotent: the engine only spawns once. The id is any
-`eq?`-comparable Scheme value: a symbol, a widget instance, a
-`(list 'tick widget)` pair for per-instance ids.
+Subscriptions without `#:id` live until the engine stops; they can't
+be cancelled. Re-issuing the same `(every #:id k ...)` is idempotent:
+the engine spawns once. The id is any `eq?`-comparable value: a
+symbol, a widget, a `(list 'tick widget)` pair for per-widget ids.
 
 ## Live coding
 
-```
-make repl
-```
+The engine keeps running across edits. Connect a REPL to a running
+app and re-evaluate any form:
 
-opens a Geiser-listenable image. From an Emacs/VS Code Geiser session:
+- Re-evaluating a `(define-method (view ...) ...)` form replaces the
+  method body; the next render uses it.
+- Re-evaluating a `(define-class ...)` form runs Guile's class-
+  redefinition protocol; existing widgets migrate to the new slot
+  layout.
+- `(set! (counter-n c) 99)` from the REPL mutates state directly.
+- Re-evaluating a theme swaps palettes or restyles.
 
-- `C-M-x` on a `(define-method (view (c <counter>)) ...)` form
-  replaces the method body. Existing instances dispatch to the new
-  body on the next render.
-- `C-M-x` on a `(define-class <counter> () ...)` form triggers Guile's
-  class-redefinition protocol. Existing instances migrate to the new
-  slot layout.
-- `(set! (counter-n c) 99)` from the REPL mutates a slot directly.
-- Re-evaluate a theme to swap palettes or restyle.
-
-No rebuild loop. The process keeps running across edits.
+`make repl` runs `guile -L . --listen=37147`, opening a TCP REPL on
+port 37147. Connect with `telnet localhost 37147`, or from any editor
+that talks to a Guile REPL.
 
 ## Msgs
 
@@ -448,7 +453,7 @@ with a vbox of 1000 lines in a 24-row rect shows the last 24 lines;
 the top of the vbox renders off the rect and the term grid drops
 out-of-range writes. Same on the horizontal axis with `#:h 'right`.
 Use this for chat-style tail-anchoring, right-aligned status, or
-centered-overflow content: no magic numbers, no size-state needed.
+centered-overflow content.
 
 ```scheme
 (align (vbox banner subtitle ...) #:h 'center #:v 'middle)   ; splash
@@ -511,7 +516,7 @@ Plain widget classes in `canary/components/`:
 
 Each exposes a bare-named constructor (`(button #:label ...)`,
 `(spinner)`, `(textinput #:prompt ...)`, etc.) and a small set of
-`X-field` accessors.  Embed an instance as a slot on your app class;
+`X-field` accessors.  Embed a widget as a slot on your app class;
 the engine cascades msgs into it automatically.
 
 Naming is uniform across the whole library: `<thing>` is the class
@@ -523,20 +528,18 @@ user-facing constructor. Applies to engine plumbing (`(engine
 
 ## Anti-patterns
 
-- **Don't** return new state from `update`. Mutate in place with the
-  accessors, return `(values self cmd)`.
-- **Don't** construct cmds as quoted lists: `'(set-title "x")` NO,
-  `(set-title "x")` OK.
-- **Don't** put style flags in a list: `#:attrs '(bold italic)` NO,
-  `#:bold #:italic` OK.
-- **Don't** poll for state changes. Every transition is a msg; every
-  side-effect is a cmd.
-- **Don't** issue `(alt-screen 'on)` / `(cursor 'hide)` / `(set-title
-  ...)` from your `<init>` update for the defaults. Pass them as kwargs
-  to `run-app`.
+- **Don't** return new state from `update`. Mutate in place; return
+  `(values self cmd)`.
+- **Don't** quote cmd literals: write `(set-title "x")`, not
+  `'(set-title "x")`.
+- **Don't** put style flags in a list: write `#:bold #:italic`, not
+  `#:attrs '(bold italic)`.
 - **Don't** side-effect inside `view`. The cascade walker calls it
-  once to find items before render calls it again to produce
-  cmds; any effect fires twice per msg.
+  once to find widgets before render calls it again to produce cmds;
+  any effect fires twice per msg.
+- **Don't** expand widgets via `(view (chat-input c))` in your own
+  view; pass the widget itself, `(chat-input c)`. The cascade can't
+  reach widgets it can't see by reference.
 
 ## Terminal capabilities
 
@@ -560,21 +563,3 @@ Mouse reporting is opt-in via the `#:mouse` kwarg on `run-app`
 at init via a capability probe; falls back to text fallback views
 when the terminal doesn't speak the protocol.
 
-## Module surface
-
-```scheme
-(use-modules (canary))
-```
-
-Re-exports the public surface: `view`, `update` generics,
-layout primitives, theme/palette forms, keymap helpers, msg + cmd
-constructors, `run-app`, `send`, `<key>` / `<mouse>` / `<tick>` etc.
-See `canary.scm` for the full list.
-
-Components are imported individually:
-
-```scheme
-(use-modules (canary)
-             (canary components panel)
-             (canary components textinput))
-```
