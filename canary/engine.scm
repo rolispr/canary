@@ -369,7 +369,7 @@ list-of-child-cmds)."
               (loop rest overrides new-cmds))
              (else
               (loop rest
-                    (cons* new-val (symbol->keyword name) overrides)
+                    (cons* (symbol->keyword name) new-val overrides)
                     new-cmds))))))))))
 
 (define (dispatch-update! eng node msg)
@@ -521,7 +521,7 @@ record itself is not rebuilt (it's transient anyway)."
                 (cond
                  ((eq? new-sv sv) (loop rest overrides found-cmd))
                  (else (loop rest
-                             (cons* new-sv (symbol->keyword name) overrides)
+                             (cons* (symbol->keyword name) new-sv overrides)
                              (or found-cmd new-cmd)))))))))))))
    ((vbox-node? val)
     (match (search-each (vbox-node-items val) id eng msg)
