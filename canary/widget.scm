@@ -2,7 +2,7 @@
   #:use-module (oop goops)
   #:use-module (ice-9 match)
   #:export (update-slots
-            <focusable>
+            <widget>
             widget-id))
 
 ;;; Commentary:
@@ -28,7 +28,7 @@ cache."
         (hash-set! %slot-keyword-cache cls pairs)
         pairs)))
 
-(define-class <focusable> ()
+(define-class <widget> ()
   (id #:init-form (gensym "w-") #:getter widget-id))
 
 (define (update-slots obj . overrides)

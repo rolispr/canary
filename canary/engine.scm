@@ -451,7 +451,7 @@ subs) can resolve to current instances."
   (let ((tbl (make-hash-table)))
     (walk-tree node
                (lambda (n)
-                 (when (is-a? n <focusable>)
+                 (when (is-a? n <widget>)
                    (hash-set! tbl (widget-id n) n))))
     tbl))
 
@@ -504,7 +504,7 @@ record itself is not rebuilt (it's transient anyway)."
    ((string? val) (cons val #f))
    ((is-a? val <object>)
     (cond
-     ((and (is-a? val <focusable>) (eq? (widget-id val) id))
+     ((and (is-a? val <widget>) (eq? (widget-id val) id))
       (plain-update eng val msg))
      (else
       (let loop ((slots (class-slots (class-of val)))
@@ -754,7 +754,7 @@ Three contribution sources:
            ((is-a? node <object>)
             (cond
              ((and (not inside?)
-                   (is-a? node <focusable>)
+                   (is-a? node <widget>)
                    (eq? (widget-id node) target-id))
               ;; Hit the focused widget: descend into its view with
               ;; `inside?` set so keymap-nodes inside its view tree
@@ -853,7 +853,7 @@ unmount can auto-cancel it."
     (let* ((cell        (make-sub-cell))
            (owner       (%current-update-widget))
            (owner-id    (and owner
-                             (is-a? owner <focusable>)
+                             (is-a? owner <widget>)
                              (widget-id owner))))
       (when id (hash-set! (engine-subs eng) id cell))
       (when (and owner-id id)
@@ -962,7 +962,7 @@ cancel, plus all screen and app cmds.  Unknown cmds are dropped."
               (ids  (cond
                      ((not path) '())
                      (else (map widget-id
-                                (filter (lambda (n) (is-a? n <focusable>))
+                                (filter (lambda (n) (is-a? n <widget>))
                                         path))))))
          (set-engine-focus-chain! eng ids)))
       (('exec command on-done)

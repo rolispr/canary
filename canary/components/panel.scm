@@ -15,7 +15,7 @@
             panel-hover-border
             panel-content))
 
-(define-class <panel> (<focusable>)
+(define-class <panel> (<widget>)
   (title         #:init-keyword #:title         #:init-value #f
                  #:getter panel-title)
   (footer        #:init-keyword #:footer        #:init-value #f

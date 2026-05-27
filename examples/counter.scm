@@ -5,7 +5,7 @@
 
 (use-modules (canary) (oop goops))
 
-(define-class <counter> (<focusable>)
+(define-class <counter> (<widget>)
   (n #:init-keyword #:n #:init-value 0 #:getter counter-n))
 
 (define-method (view (c <counter>))

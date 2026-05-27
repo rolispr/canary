@@ -23,7 +23,7 @@
 (define spinner-moon   '("🌑" "🌒" "🌓" "🌔" "🌕" "🌖" "🌗" "🌘"))
 (define spinner-arrow  '("←" "↖" "↑" "↗" "→" "↘" "↓" "↙"))
 
-(define-class <spinner> (<focusable>)
+(define-class <spinner> (<widget>)
   (frames    #:init-keyword #:frames    #:init-value spinner-dots
              #:getter spinner-frames)
   (frame-idx #:init-keyword #:frame-idx #:init-value 0

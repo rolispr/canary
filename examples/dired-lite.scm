@@ -58,7 +58,7 @@
     (lambda (key . args)
       (string-append "(can't preview: " (symbol->string key) ")"))))
 
-(define-class <dired> (<focusable>)
+(define-class <dired> (<widget>)
   (path    #:init-keyword #:path    #:init-value "/" #:getter dired-path)
   (entries #:init-value '()                          #:getter dired-entries)
   (cursor  #:init-value 0                            #:getter dired-cursor)

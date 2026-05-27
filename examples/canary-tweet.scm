@@ -115,7 +115,7 @@
 (define (sprite-node-for frame)
   (vector-ref %sprite-nodes (modulo (quotient frame 3) 4)))
 
-(define-class <note> (<focusable>)
+(define-class <note> (<widget>)
   (age   #:init-value 0          #:getter note-age)
   (glyph #:init-keyword #:glyph  #:getter note-glyph))
 
@@ -134,7 +134,7 @@ lifetime filtered out."
    (+ beak-x (inexact->exact (round (* 4 (sin (* (note-age n) 0.45))))))
    (- beak-y (note-age n))))
 
-(define-class <tweet> (<focusable>)
+(define-class <tweet> (<widget>)
   (frame #:init-value 0   #:getter tweet-frame)
   (notes #:init-value '() #:getter tweet-notes)
   (cols  #:init-value 80  #:getter tweet-cols)
