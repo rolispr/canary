@@ -387,43 +387,103 @@ longer an alias for `alt`.
 
 ### Three levels of key handling
 
-| level   | where it lives                                  | priority | use for                                  |
-|---------|-------------------------------------------------|----------|-------------------------------------------|
-| global  | engine's `keymap` slot (`run-app #:keymap`)      | lowest   | app-wide binds — quit, `ctrl-c`           |
-| scoped  | `with-keymap` wrapper in the view tree           | middle   | scene binds, modal overlays, per-pane    |
-| raw     | focused widget's `update (msg <key>)` method     | highest  | typing, inline nav (textinput, menu)     |
+| level   | where it lives                                  | use for                                  |
+|---------|-------------------------------------------------|-------------------------------------------|
+| global  | engine's `keymap` slot (`run-app #:keymap`)      | app-wide binds — quit, `ctrl-c`           |
+| scoped  | `with-keymap` wrapper in the view tree           | scene binds, modal overlays, per-pane    |
+| raw     | focused widget's `update (msg <key>)` method     | typing, inline nav (textinput, menu)     |
 
 Dispatch order on a key:
 
 1. Engine collects scoped keymaps from `with-keymap` wrappers along
-   the focus path (innermost wrapper first).
+   the focus path AND inside the focused widget's own view (innermost
+   wrapper first).
 2. Stack walks top-down: scoped innermost → scoped outermost →
    engine global. First match fires its action symbol as a cascade
-   msg.
+   msg, and the raw key is consumed.
 3. If nothing matches, the raw key routes down the focus chain to
-   the focused widget's `update (msg <key>)`.
+   the focused widget's `update (msg <key>)` method (typing, etc).
+
+Scoped beats raw. Don't bind self-inserting chars (`#\h`, `#\a`, …)
+in a scope that contains a focused textinput — the bind shadows the
+typed char. Reserve scoped chars for modes where typing isn't
+happening (game keys on a canvas) and reserve action keys (`escape`,
+`enter`, `tab`, function keys, modifier chords) for scopes that
+overlay text inputs.
+
+### Anatomy of a multi-scene app
+
+The shape every non-trivial canary app converges on:
 
 ```scheme
+;;; Root: holds the active scene, swaps it on <scene-change>.
+(define-class <app> (<focusable>)
+  (scene #:init-keyword #:scene #:getter app-scene))
+
+(define-method (view (a <app>))
+  ;; Return the scene AS a node, NOT (view scene).
+  ;; Calling view here renders the scene immediately, stripping its
+  ;; widget identity from the tree — focus can no longer reach it,
+  ;; and any `with-keymap` the scene wraps itself with goes silent.
+  (app-scene a))
+
+(define-method (update (a <app>) (msg <scene-change>))
+  (cons (update-slots a #:scene (scene-change-scene msg)) #f))
+
+;;; Each scene owns its keymap and wraps its own view.
+(define-class <auth> (<focusable>)
+  (menu #:init-form (menu #:items %auth-items) #:getter auth-menu))
+
+(define %auth-km
+  (keymap (bind 'escape 'auth-back)))
+
+(define-method (view (a <auth>))
+  (with-keymap %auth-km
+    (vbox (title-view) (auth-menu a))))
+
+(define-method (update (a <auth>) (msg <mount>))
+  ;; Send raw keys to the menu (its update handles arrows/enter).
+  (cons a (focus (auth-menu a))))
+
+;;; Canvas scene: own keymap, optional modal overlay.
 (define %canvas-km
   (keymap (bind #\h 'move-left) (bind 'escape 'open-pause)))
 
 (define %pause-km
   (keymap (bind 'escape 'close-pause) (bind 'enter 'menu-select)))
 
+(define-class <canvas> (<focusable>)
+  (pause-menu #:init-value #f #:getter canvas-pause-menu))
+
 (define-method (view (c <canvas>))
-  (with-keymap %canvas-km
-    (vbox (map-viewport-view c)
-          (and (canvas-pause-menu c)
-               (with-keymap %pause-km (canvas-pause-menu c))))))
+  (with-keymap (if (canvas-pause-menu c) %pause-km %canvas-km)
+    (vbox (map-view c)
+          (and (canvas-pause-menu c) (canvas-pause-menu c)))))
 ```
 
-When the pause menu is open and focused, the active stack is
-`[%pause-km, %canvas-km, engine-global]`. `escape` matches
-`%pause-km` first and fires `'close-pause`, shadowing the canvas's
-`'open-pause` bind. When the menu closes (slot cleared, focus back
-on canvas), the stack contracts to `[%canvas-km, engine-global]`
-naturally — no push/pop bookkeeping. The wrapper vanishing from the
-tree is what de-scopes it.
+When the pause menu opens and gets focused, the active stack is
+`[%pause-km, engine-global]`. `escape` matches `%pause-km` first and
+fires `'close-pause`. When the menu closes (slot cleared, focus
+back on canvas), the canvas's `view` swaps in `%canvas-km` and the
+stack reshapes — no push/pop bookkeeping. The wrapper vanishing
+from the tree is what de-scopes it.
+
+Three things are non-obvious the first time you build this shape:
+
+- **Parent returns child as a node.** `(view (app-scene a))` is
+  wrong; `(app-scene a)` is right. The engine walks through child
+  widgets and re-enters their `view` itself.
+
+- **Scene wraps its own view in `with-keymap`.** Don't put scoped
+  binds on the parent — they should travel with the scene.
+
+- **Use `focus` to route raw keys to one of N coexisting children.**
+  Cascade walks every focusable slot on the parent for non-key msgs,
+  but raw keys go through the focus chain alone. If a parent has
+  three textinputs in slots and you don't focus one, all three
+  receive every keystroke.
+
+### Chord-state caveat
 
 Scoped keymaps don't preserve multi-key chord state across renders
 (the wrapper is rebuilt per frame). Define chord-bearing keymaps as
