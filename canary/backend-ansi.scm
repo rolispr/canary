@@ -649,13 +649,19 @@ the next frame diffs against this one."
                  ;;   splits the cursor-hide/show envelope, exposing the
                  ;;   per-cell cursor sweep mid-frame.
                  (buf   (open-output-string)))
-            (display "\x1b[?25l" buf)       ; hide cursor BEFORE sync-begin
-            (display +sync-begin+ buf)      ; so terminals that ignore mode 2026
-            (display diff buf)              ; (or apply it imperfectly) still
+            ;; No per-frame cursor hide/show. backend-init emits a one-
+            ;; shot \e[?25l at session start; we leave the cursor hidden
+            ;; for the whole render lifetime. Earlier attempts wrapped
+            ;; each frame in hide + … + show, which made every frame end
+            ;; with show immediately followed by the next frame's hide.
+            ;; The terminal honored both: cursor flashed visible between
+            ;; them, at the diff's resting position — which moves frame
+            ;; to frame. Visually that's "an underline glyph drawn
+            ;; everywhere" as the cursor flickered through positions.
+            (display +sync-begin+ buf)
+            (display diff buf)
             (when (pair? gfx-cmds) (emit-images! b buf gfx-cmds))
-            (display +sync-end+ buf)        ; see the hide instantly. show goes
-            (display "\x1b[?25h" buf)       ; AFTER sync-end so cursor only
-                                            ; reappears once the frame has landed.
+            (display +sync-end+ buf)
             (let ((frame (get-output-string buf)))
               (display frame out)
               (force-output out)
