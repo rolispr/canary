@@ -521,7 +521,8 @@ record itself is not rebuilt (it's transient anyway)."
              (match (search-and-replace sv id eng msg)
                ((new-sv . new-cmd)
                 (cond
-                 ((eq? new-sv sv) (loop rest overrides found-cmd))
+                 ((eq? new-sv sv)
+                  (loop rest overrides (or found-cmd new-cmd)))
                  (else (loop rest
                              (cons* (symbol->keyword name) new-sv overrides)
                              (or found-cmd new-cmd)))))))))))))

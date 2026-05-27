@@ -7,6 +7,11 @@
              (canary protocol)
              (canary render)
              (canary draw)
+             (canary widget)
+             (canary key)
+             (canary keymap)
+             ((canary engine-types) #:select (engine))
+             ((canary backend-test) #:select (make-test-backend))
              (oop goops))
 
 (test-begin "engine")
@@ -60,5 +65,33 @@
   (test-equal "vbox with stateful renders all"
     '("header" "footer" "tape")
     texts))
+
+;; Regression: search-and-replace MUST preserve a child's cmd even when
+;; the child returns the same instance.  Menu's Enter handler returns
+;; `(cons m thunk)` with m unchanged but a cmd to fire — losing that
+;; cmd silently broke every action that didn't change state (login,
+;; menu selection, etc.).
+(define-class <child> (<focusable>))
+
+(define %emitted-cmd 'fire-me)
+
+(define-method (update (c <child>) (msg <key>))
+  ;; Return same instance (no state change), but emit a cmd.
+  (cons c (lambda () %emitted-cmd)))
+
+(define-class <parent> ()
+  (kid #:init-form (make <child>) #:getter parent-kid))
+
+(let* ((p   (make <parent>))
+       (kid (parent-kid p))
+       (sr  (@@ (canary engine) search-and-replace))
+       (eng (engine #:backend (make-test-backend) #:keymap (keymap) #:root p)))
+  (let ((result (sr p (widget-id kid) eng (key 'enter))))
+    (test-assert "search-and-replace returns a (new-node . cmd) pair"
+                 (pair? result))
+    (test-assert "cmd from a state-unchanged child must reach the top"
+                 (procedure? (cdr result)))
+    (test-equal "thunk produces the expected action"
+                'fire-me ((cdr result)))))
 
 (test-end "engine")
