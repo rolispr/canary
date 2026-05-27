@@ -357,15 +357,23 @@ did not change between frames."
 (define %min-shift-rows 4)
 
 (define (find-shift-region prev cur dx dy)
-  "For shift candidate (dx, dy), classify every row as 'shift /
-'identical / 'differ, then return (cons t b) for the largest
-contiguous run of rows whose classification is 'shift or 'identical —
-provided it (a) spans at least %min-shift-rows, AND (b) actually
-contains at least one 'shift row. Without (b) we'd fire the fast
-path on idle frames where row N happens to match row N+dy because
-both rows are blank/repeated content — a spurious scroll that costs
-bytes and on non-blank content would visibly corrupt the screen.
-Returns #f otherwise."
+  "For shift candidate (dx, dy), return (cons t b) for the largest
+contiguous run of rows that are STRICTLY 'shift — provided it spans
+at least %min-shift-rows.  Else #f.
+
+'identical rows are NOT allowed in the band, even though they look
+shift-compatible.  The DECSTBM-scoped scroll command actually MOVES
+every row inside the band (that's what scrolling means); for a row
+whose content was identical between frames, the scroll then displays
+the WRONG content (whatever was one row up) at that position.  Most
+visible on the chrome rows: a status row at row 0 included in the
+band gets its content scrolled off the top of the region and lost.
+
+By restricting the band to 'shift-only, chrome rows fall outside it
+and are handled by the cell-by-cell path (which finds them unchanged
+and emits nothing).  Interior 'identical rows within the map break
+the band into two smaller shift runs; we pick the longest single
+run and ignore the rest."
   (let* ((h (term-height cur))
          (cls (make-vector h 'differ)))
     (do ((y 0 (+ y 1))) ((>= y h))
@@ -375,35 +383,25 @@ Returns #f otherwise."
                     ((row-shifted-by? prev cur y dx dy) 'shift)
                     (else                               'differ))))
     (let lp ((y 0)
-             (best-t #f) (best-len 0) (best-has-shift? #f)
-             (cur-t #f)  (cur-len 0)  (cur-has-shift? #f))
+             (best-t #f) (best-len 0)
+             (cur-t #f)  (cur-len 0))
       (define (finish-run!)
         (cond
-         ((and cur-has-shift? (> cur-len best-len))
-          (values cur-t cur-len cur-has-shift?))
-         (else
-          (values best-t best-len best-has-shift?))))
+         ((> cur-len best-len) (values cur-t  cur-len))
+         (else                 (values best-t best-len))))
       (cond
        ((>= y h)
         (call-with-values finish-run!
-          (lambda (final-t final-len final-has-shift?)
+          (lambda (final-t final-len)
             (cond
-             ((and final-t final-has-shift? (>= final-len %min-shift-rows))
+             ((and final-t (>= final-len %min-shift-rows))
               (cons final-t (+ final-t final-len -1)))
              (else #f)))))
+       ((eq? (vector-ref cls y) 'shift)
+        (lp (+ y 1) best-t best-len (or cur-t y) (+ cur-len 1)))
        (else
-        (let ((c (vector-ref cls y)))
-          (cond
-           ((eq? c 'differ)
-            (call-with-values finish-run!
-              (lambda (nbt nbl nbh)
-                (lp (+ y 1) nbt nbl nbh #f 0 #f))))
-           (else
-            (lp (+ y 1)
-                best-t best-len best-has-shift?
-                (or cur-t y)
-                (+ cur-len 1)
-                (or cur-has-shift? (eq? c 'shift)))))))))))
+        (call-with-values finish-run!
+          (lambda (nbt nbl) (lp (+ y 1) nbt nbl #f 0))))))))
 
 (define (detect-shift prev cur)
   "Return (list dx dy t b) for the best cardinal shift whose
