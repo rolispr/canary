@@ -1039,6 +1039,19 @@ debounce fiber after quiescence, and directly during bootstrap."
 re-emits after quiescence."
   (and (pair? msg) (eq? (car msg) 'resize-flushed) (resize? (cdr msg))))
 
+(define (dispatch! eng dispatcher m)
+  "Run DISPATCHER (cascade! or route-to-focus!) for M, run any cmd it
+returned, then report whether the engine root was actually rebuilt.
+The root-rebuild check is the engine's @q{did anything change?}
+signal — it works because @code{update-slots} short-circuits to the
+input instance when every override matches, so a widget returning
+@code{(cons self #f)} for a no-op tick lets the cascade skip the
+rebuild all the way up to the root.  No state change → no render."
+  (let* ((before (engine-root eng))
+         (cmd    (and m (dispatcher eng m))))
+    (run-cmd! eng cmd)
+    (not (eq? before (engine-root eng)))))
+
 (define (process-one eng msg)
   "Returns #t if anything reacted/should re-render, #f otherwise.
 
@@ -1065,28 +1078,17 @@ Routing policy:
            ((not action)
             ;; left-press in a region with no left action → fall through
             ;; so raw mouse can flow to focus, e.g. the canvas drag.
-            (let* ((m (apply-filter eng msg))
-                   (cmd (and m (route-to-focus! eng m))))
-              (run-cmd! eng cmd) #t))
+            (dispatch! eng route-to-focus! (apply-filter eng msg)))
            ((eq? action 'quit) (stop-engine! eng) #t)
            (else
-            (let* ((m (apply-filter eng action))
-                   (cmd (and m (cascade! eng m))))
-              (run-cmd! eng cmd)
-              #t)))))
+            (dispatch! eng cascade! (apply-filter eng action))))))
        (else
         (let ((action (try-keymap-stack! eng msg)))
           (cond
            ((eq? action 'pending) #f)
            ((eq? action 'quit) (stop-engine! eng) #t)
-           (action (let* ((m (apply-filter eng action))
-                          (cmd (and m (cascade! eng m))))
-                     (run-cmd! eng cmd)
-                     #t))
-           (else (let* ((m (apply-filter eng msg))
-                        (cmd (and m (route-to-focus! eng m))))
-                   (run-cmd! eng cmd)
-                   #t))))))))
+           (action (dispatch! eng cascade! (apply-filter eng action)))
+           (else   (dispatch! eng route-to-focus! (apply-filter eng msg)))))))))
    ((mouse-right-press? msg)
     ;; Right-press: same click-region machinery, but dispatch the
     ;; region's right-action. If the region has no right-action, fall
@@ -1099,21 +1101,14 @@ Routing policy:
          (right
           (cond
            ((eq? right 'quit) (stop-engine! eng) #t)
-           (else
-            (let* ((m (apply-filter eng right))
-                   (cmd (and m (cascade! eng m))))
-              (run-cmd! eng cmd) #t))))
+           (else (dispatch! eng cascade! (apply-filter eng right)))))
          (else
           (let ((action (try-keymap-stack! eng msg)))
             (cond
              ((eq? action 'pending) #f)
              ((eq? action 'quit) (stop-engine! eng) #t)
-             (action (let* ((m (apply-filter eng action))
-                            (cmd (and m (cascade! eng m))))
-                       (run-cmd! eng cmd) #t))
-             (else (let* ((m (apply-filter eng msg))
-                          (cmd (and m (route-to-focus! eng m))))
-                     (run-cmd! eng cmd) #t)))))))))
+             (action (dispatch! eng cascade! (apply-filter eng action)))
+             (else   (dispatch! eng route-to-focus! (apply-filter eng msg))))))))))
    ((and (mouse? msg) (eq? (mouse-action msg) 'motion))
     ;; Motion always updates the tracked cursor (for hover restyle). If
     ;; a button is held (low 2 bits != 3 = "no button"), also route to
@@ -1121,11 +1116,10 @@ Routing policy:
     ;; stops at the position update.
     (let ((moved? (note-mouse-pos! eng msg))
           (drag?  (not (= 3 (logand (mouse-button msg) 3)))))
-      (when drag?
-        (let* ((m   (apply-filter eng msg))
-               (cmd (and m (route-to-focus! eng m))))
-          (run-cmd! eng cmd)))
-      (or moved? drag?)))
+      (let ((changed?
+             (and drag?
+                  (dispatch! eng route-to-focus! (apply-filter eng msg)))))
+        (or moved? changed?))))
    ((and (key? msg)
          (pair? (engine-focus-chain eng))
          (pair? (cdr (engine-focus-chain eng))))
@@ -1136,33 +1130,18 @@ Routing policy:
       (cond
        ((eq? action 'pending) #f)
        ((eq? action 'quit) (stop-engine! eng) #t)
-       (action
-        (let* ((m (apply-filter eng action))
-               (cmd (and m (cascade! eng m))))
-          (run-cmd! eng cmd) #t))
-       (else
-        (let* ((m (apply-filter eng msg))
-               (cmd (and m (route-to-focus! eng m))))
-          (run-cmd! eng cmd) #t)))))
+       (action (dispatch! eng cascade! (apply-filter eng action)))
+       (else   (dispatch! eng route-to-focus! (apply-filter eng msg))))))
    ((or (key? msg) (mouse? msg))
     (when (mouse? msg) (note-mouse-pos! eng msg))
     (let ((action (try-keymap-stack! eng msg)))
       (cond
        ((eq? action 'pending) #f)
        ((eq? action 'quit) (stop-engine! eng) #t)
-       (action (let* ((m (apply-filter eng action))
-                      (cmd (and m (cascade! eng m))))
-                 (run-cmd! eng cmd)
-                 #t))
-       (else (let* ((m (apply-filter eng msg))
-                    (cmd (and m (route-to-focus! eng m))))
-               (run-cmd! eng cmd)
-               #t)))))
+       (action (dispatch! eng cascade! (apply-filter eng action)))
+       (else   (dispatch! eng route-to-focus! (apply-filter eng msg))))))
    (else
-    (let* ((m (apply-filter eng msg))
-           (cmd (and m (cascade! eng m))))
-      (run-cmd! eng cmd)
-      #t))))
+    (dispatch! eng cascade! (apply-filter eng msg)))))
 
 (define +resize-debounce-seconds+ 0.05)
 
