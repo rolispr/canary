@@ -1,0 +1,844 @@
+#+TITLE: canary architecture
+#+OPTIONS: toc:nil num:nil
+
+This document covers canary's internal architecture, data flow, and
+module organisation.
+
+* Table of contents
+
+- [[#overview][Overview]]
+- [[#system-architecture][System architecture]]
+- [[#data-flow][Data flow]]
+- [[#view-tree-and-cascade][View tree and cascade]]
+- [[#render-pipeline-write-path][Render pipeline (write path)]]
+- [[#terminal-emulator-parse-path][Terminal emulator (parse path)]]
+- [[#faces-theme-palette][Faces, theme, palette]]
+- [[#focus-and-keymap-dispatch][Focus and keymap dispatch]]
+- [[#subscriptions-and-lifecycle][Subscriptions and lifecycle]]
+- [[#live-coding-via-repl][Live coding via REPL]]
+- [[#core-modules][Core modules]]
+
+* Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+
+canary is a TUI library for Guile. Apps are GOOPS classes with a
+~view~ method returning a node tree and an ~update~ method returning
+~(cons next-self cmd)~. The engine reads input, decodes typed msgs,
+walks the tree, dispatches ~update~ through it, renders the result,
+and emits the minimal ANSI byte diff to the host terminal.
+
+The model is a Scheme-flavoured Elm/Bubble Tea: msgs in, state
+out, cmds for effects. Two generics carry the whole API:
+
+#+begin_src scheme
+view   : (self)     -> node
+update : (self msg) -> (cons next-self cmd-or-#f)
+#+end_src
+
+Live coding falls out of how methods, GOOPS classes, and the cell
+diff interact. Re-evaluate a ~define-method~ from a connected REPL
+and the next frame uses the new body. Re-evaluate a ~define-class~
+and Guile's redefinition protocol migrates the running widgets.
+
+The architecture has two doors into one shared cell model
+(~<term>~):
+
+- write path : view tree -> draw cmds -> cells
+- parse path : bytes -> ANSI state machine -> cells
+
+And one door out: ~term-diff->ansi~ emits the byte sequence that
+takes ~prev-term~ to ~cur-term~. Every frame swaps the slots and
+diffs forward.
+
+* System architecture
+:PROPERTIES:
+:CUSTOM_ID: system-architecture
+:END:
+
+#+begin_src mermaid
+graph TB
+    subgraph "Host terminal"
+        TTY[tty stdin / stdout]
+    end
+
+    subgraph "Event loop (fibers)"
+        ENG[Engine]
+        QUEUE[Msg queue + bell pipe]
+        FILTER[Engine filter]
+    end
+
+    subgraph "Input decoder"
+        BYTES[Raw byte reader]
+        DEC[ANSI / kitty decoder]
+        MSG["<key> / <mouse> / <paste> / <resize>"]
+    end
+
+    subgraph "Dispatch"
+        SCOPED[Scoped keymap stack]
+        GLOBAL[Global keymap + chord state]
+        FOCUS[Focus chain]
+        CASCADE[Cascade walker]
+        UPDATE[update generic]
+    end
+
+    subgraph "View tree"
+        VIEW[view generic]
+        LAYOUT[Layout records: vbox hbox boxed pad align flex wrap pin overlay ...]
+        WIDGETS[Widgets: focusable GOOPS instances]
+    end
+
+    subgraph "Render pipeline"
+        RC[Tree -> draw cmds]
+        REPLAY[Replay cmds into cur-term]
+        CUR[cur-term]
+        PREV[prev-term]
+        DIFF[term-diff -> ANSI bytes]
+    end
+
+    subgraph "Theme"
+        PAL[Palettes]
+        FACE[Face attrs]
+    end
+
+    subgraph "Cmd effects"
+        EFF["every / after / focus / quit / set-title / palette ..."]
+        SUBS[Fibers: per-sub tickers and timers]
+    end
+
+    TTY --> BYTES
+    BYTES --> DEC
+    DEC --> MSG
+    MSG --> QUEUE
+    QUEUE --> ENG
+    ENG --> FILTER
+    FILTER --> SCOPED
+    SCOPED --> GLOBAL
+    GLOBAL --> FOCUS
+    FOCUS --> CASCADE
+    CASCADE --> UPDATE
+    UPDATE --> EFF
+    EFF --> SUBS
+    SUBS --> QUEUE
+
+    ENG --> VIEW
+    VIEW --> LAYOUT
+    VIEW --> WIDGETS
+    WIDGETS -.->|embed by ref| LAYOUT
+    LAYOUT --> RC
+    RC --> REPLAY
+    REPLAY --> CUR
+    CUR --> DIFF
+    PREV --> DIFF
+    DIFF --> TTY
+    FACE --> RC
+    PAL --> FACE
+
+    style ENG fill:#1d3557
+    style DIFF fill:#9d0208
+    style CUR fill:#2d6a4f
+    style PAL fill:#457b9d
+#+end_src
+
+** Layer responsibilities
+
+*Event loop:*
+- ~<engine>~ holds msg queue, backend, theme, global keymap, root
+  widget, focus chain, subscriptions, mouse state, log buffer.
+- A bell pipe (one byte over a pipe) wakes the loop fiber when a
+  msg arrives from any source: input fiber, ~send~ from a cmd
+  thunk, ~every~ ticker, SIGWINCH.
+- ~send~ is the only thread-safe entry point: queue mutex plus
+  bell write.
+
+*Input decoder:*
+- Reads raw bytes from the tty, decodes CSI / OSC / DCS, kitty
+  keyboard CSI u, bracketed paste, focus-in / focus-out, mouse SGR
+  and 1006 modes.
+- Emits typed msg records: ~<key>~, ~<mouse>~, ~<paste>~,
+  ~<resize>~, ~<focus>~, ~<blur>~.
+
+*Dispatch:*
+- Three-level keymap pipeline (scoped innermost, scoped outer,
+  global), then raw-key fallthrough to the focused widget.
+- Cascade walker descends the rendered tree and calls ~update~ on
+  every widget it sees. Leaf-to-root order for key / mouse;
+  broadcast for everything else.
+
+*View tree:*
+- Layout records are pure-data nodes. Widgets are ~<focusable>~
+  GOOPS instances embedded by reference, not by value.
+- ~view~ is called twice per msg: once during the cascade to find
+  widgets to dispatch on, once after to produce draw cmds.
+
+*Render pipeline:*
+- ~view->cmds~ walks the tree by type check and yields ~<draw>~
+  records (move, set-face, put-glyph, set-link, set-zone, ...).
+- ~render-cmds-to-term!~ replays those cmds into ~cur-term~,
+  mutating cells one at a time.
+- ~term-diff->ansi~ walks both ~<term>~ snapshots and emits cursor
+  moves, SGR changes, OSC 8 / 133 transitions, then changed glyphs.
+- The backend swaps the slots so the next frame diffs against this
+  one.
+
+*Theme:*
+- A ~<theme>~ holds palettes by name; the active palette resolves
+  symbolic colour names referenced from ~<face-attrs>~ at render
+  time.
+- ~cycle-palette~ / ~set-palette~ swap the active name; every
+  ~#:fg 'accent~ in the tree recolours on the next frame.
+
+*Cmd effects:*
+- Cmds are records, not quoted lists. ~every~ / ~after~ spawn
+  fibers tagged with an id; the engine cancels subs whose owning
+  widget left the tree, or whose id matches a ~cancel~.
+
+* Data flow
+:PROPERTIES:
+:CUSTOM_ID: data-flow
+:END:
+
+#+begin_src mermaid
+sequenceDiagram
+    participant Term as tty
+    participant In as Input fiber
+    participant Q as Msg queue
+    participant Loop as Engine loop
+    participant Disp as Keymap stack
+    participant Tree as Cascade walker
+    participant Up as update methods
+    participant Cmd as Cmd handler
+    participant Sub as Sub fibers
+    participant V as view methods
+    participant R as Renderer
+    participant Cur as cur-term
+    participant Prev as prev-term
+
+    Term->>In: bytes
+    In->>Q: <key> / <mouse> / <paste>
+    Sub->>Q: <tick> on every/after fire
+    Q-->>Loop: bell pipe wakeup
+    Loop->>Disp: keymap dispatch
+    Disp->>Tree: walk focus chain (keys/mouse)
+    Disp->>Tree: broadcast (other msgs)
+    Tree->>Up: (update widget msg)
+    Up-->>Tree: (cons next-self cmd)
+    Tree-->>Loop: rebuilt root
+    Loop->>Cmd: collected cmds
+    Cmd->>Sub: spawn / cancel fiber
+    Cmd-->>Q: send back msgs (e.g. exec done)
+    Loop->>V: (view root)
+    V-->>R: node tree
+    R->>R: tree -> draw cmds
+    R->>Cur: replay cmds
+    Cur->>R: diff vs Prev
+    R-->>Term: ANSI bytes (2026-bracketed)
+    Loop->>Prev: swap slots
+#+end_src
+
+** Event lifecycle
+
+1. *Input reception.* Input fiber reads bytes, runs them through
+   the decoder, emits a typed msg.
+2. *Queue + wakeup.* Msg appended to ~engine-msg-queue~ under
+   mutex; bell pipe rings to wake the loop fiber.
+3. *Filter.* If an ~engine-filter~ is set (handy for tests), it
+   sees the msg first and can suppress it.
+4. *Keymap dispatch.* For ~<key>~ and ~<mouse>~, walk scoped
+   keymaps along the focus path (innermost first), then the global
+   keymap. First match becomes an action symbol; the raw key is
+   consumed.
+5. *Cascade.* For keys / mouse: leaf-to-root through the focus
+   chain. For everything else: broadcast through every widget in
+   the rendered tree. Each widget's ~update~ method dispatches on
+   the msg class; non-matching widgets fall through to the global
+   catch-all in ~(canary view)~ and return ~(cons self #f)~.
+6. *Cmd collection.* The cascade collects every returned cmd into
+   a batch.
+7. *Cmd execution.* The cmd handler interprets each: spawn or
+   cancel subs, mutate engine knobs (~set-title~,
+   ~alt-screen~, ~mouse-mode~, ~cursor~, ~set-palette~), route
+   ~focus~ to a widget, run user thunks in a fresh fiber, etc.
+8. *View + render.* The loop calls ~(view root)~, walks the
+   resulting tree to draw cmds, replays into ~cur-term~, diffs
+   against ~prev-term~, writes the minimal byte sequence,
+   bracketed by ~\e[?2026h~ ... ~\e[?2026l~ when the host honours
+   synchronized output.
+9. *Slot swap.* ~cur-term~ becomes ~prev-term~ for the next frame.
+
+A msg with no resulting state change and no cmd skips the render
+entirely: nothing changed, nothing to diff.
+
+* View tree and cascade
+:PROPERTIES:
+:CUSTOM_ID: view-tree-and-cascade
+:END:
+
+Layout records are plain data. The renderer recognises them by
+type check; when it hits a widget, it calls ~(view widget)~ and
+recurses into the returned tree.
+
+#+begin_src scheme
+(vbox
+ (boxed (dired #:path "/foo") #:title "left")
+ (hbox  (align (spinner) #:h 'center #:width 20)
+        (pad   (button #:label "ok" #:action 'save) #:left 2)
+        (width (chat-input app) 40)))
+#+end_src
+
+The cascade does the same walk for dispatch. Two passes per msg:
+
+- *Discovery pass.* Walk the rendered tree, collect every widget
+  by ~eq?~ identity, build the focus chain.
+- *Dispatch pass.* For keys / mouse, call ~update~ on the focus
+  chain leaf-to-root. For other msgs, call ~update~ on every
+  widget. Each call yields ~(cons next-self cmd)~; the engine
+  threads ~next-self~ back into its parent slot.
+
+** Why widgets embed by reference
+
+Passing ~(chat-input c)~ into a container, not ~(view (chat-input
+c))~, keeps the widget identity in the rendered tree. The
+cascade can only reach widgets it can see by reference; expanding
+the widget inline strips its identity and the cascade walks past
+it without ever dispatching ~update~. Focus, ~<mount>~, and
+~every~ sub-cancellation all key off that identity.
+
+** Catch-all
+
+~(canary view)~ defines a global ~(update self msg)~ catch-all
+that returns ~(cons self #f)~. Users specialise ~update~ on the
+msg classes they care about; everything else silently no-ops. No
+per-class boilerplate.
+
+* Render pipeline (write path)
+:PROPERTIES:
+:CUSTOM_ID: render-pipeline-write-path
+:END:
+
+#+begin_src mermaid
+graph TD
+    ROOT[run-app root widget] --> DISC[Discovery walk]
+    DISC --> FOCUS[Focus chain]
+    DISC --> SHAPE[Shape tree]
+    SHAPE --> CMDS[view->cmds: tree -> draw cmds]
+
+    CMDS --> CLICK[clickable regions]
+    CMDS --> GLYPHS[glyph / face / link / zone cmds]
+
+    GLYPHS --> REPLAY[render-cmds-to-term! into cur-term]
+    REPLAY --> CUR[cur-term cells]
+
+    CUR --> DIFF[term-diff->ansi vs prev-term]
+    PREV[prev-term cells] --> DIFF
+
+    DIFF --> WRAP["wrap with mode 2026 brackets"]
+    WRAP --> BYTES[write bytes to tty]
+    BYTES --> SWAP[swap cur <-> prev]
+
+    style CMDS fill:#7209b7
+    style DIFF fill:#9d0208
+    style CUR fill:#2d6a4f
+#+end_src
+
+** Draw cmds
+
+~<draw>~ records carry one cell-grid operation each:
+
+| record           | meaning                                          |
+|------------------+--------------------------------------------------|
+| ~move~           | move cursor to col, row                          |
+| ~set-face~       | switch SGR state (fg, bg, bold, italic, etc.)    |
+| ~put-glyph~      | write one codepoint at the cursor               |
+| ~set-link~       | start / end OSC 8 hyperlink                     |
+| ~set-zone~       | start / end OSC 133 shell-integration zone      |
+| ~clear~          | full-screen clear                                |
+| ~image~          | inline kitty-graphics image                      |
+| ~clickable~      | record region for mouse hit-testing             |
+
+Clickable cmds never reach the tty; the backend consumes them to
+populate ~engine-click-regions~.
+
+** Cell model
+
+A cell carries:
+
+- codepoint (one Unicode scalar)
+- ~<face-attrs>~: fg, bg, bold, italic, underline style and
+  colour, overline, blink, inverse, conceal, strike
+- hyperlink uri (OSC 8 metadata)
+- semantic-content tag (OSC 133 zone)
+
+Adding a new attribute means extending ~<face-attrs>~ once; both
+the write path and the parse path pick it up because both write
+into the same cell record.
+
+** Optimisations
+
+- *Static caching.* ~(static node)~ caches rendered draw cmds
+  keyed on the rect; expensive sprite or panel chrome renders
+  once until its rect changes.
+- *Frame diffing.* ~term-diff->ansi~ emits only the cells that
+  changed. The common idle frame is zero bytes.
+- *Synchronized output.* Mode 2026 brackets the diff so the host
+  never paints a half-written frame.
+- *Cell-aware clipping.* The diff emitter understands wide
+  characters and combining marks; partial wide-cell writes are
+  resolved before bytes go out.
+
+* Terminal emulator (parse path)
+:PROPERTIES:
+:CUSTOM_ID: terminal-emulator-parse-path
+:END:
+
+The same ~<term>~ record canary writes into is what canary's own
+emulator parses ANSI bytes into. Both doors land in the same
+cell grid.
+
+#+begin_src mermaid
+graph LR
+    subgraph "Byte source"
+        IN[bytevector / port / file]
+    end
+
+    subgraph "Parser"
+        UTF[UTF-8 decoder]
+        PSM[Parser state machine]
+        OP[Op records]
+    end
+
+    subgraph "Dispatch"
+        DISP[term-process-output!]
+        SGR[SGR -> face-attrs]
+        MODE[Mode set / reset table]
+    end
+
+    subgraph "<term>"
+        SCREEN[Screen buffer]
+        ALT[Alt buffer]
+        SCROLL[Scrollback]
+        CURPEN[Current pen + cursor]
+        MODES[38-entry mode table]
+    end
+
+    IN --> UTF
+    UTF --> PSM
+    PSM --> OP
+    OP --> DISP
+    DISP --> SGR
+    DISP --> MODE
+    SGR --> CURPEN
+    DISP --> SCREEN
+    DISP -.->|mode 1049| ALT
+    SCREEN -->|overflow| SCROLL
+    MODE --> MODES
+
+    style PSM fill:#457b9d
+    style SCREEN fill:#2d6a4f
+#+end_src
+
+** Module map
+
+The emulator lives under ~canary/term/~ and re-exports as ~(canary
+term)~:
+
+| submodule              | purpose                                      |
+|------------------------+----------------------------------------------|
+| ~canary/term/types~    | ~<term>~, ~<face-attrs>~, ~<cell>~          |
+| ~canary/term/utf8~     | UTF-8 byte to codepoint decoding             |
+| ~canary/term/parser~   | CSI / OSC / DCS / ESC state machine          |
+| ~canary/term/action~   | Parser exit actions; emit op records          |
+| ~canary/term/ops~      | Op records: ~<op-print>~, ~<op-set-mode>~ etc. |
+| ~canary/term/dispatch~ | Op -> ~<term>~ mutations                      |
+| ~canary/term/sgr~      | SGR parameter -> ~<face-attrs>~ update        |
+| ~canary/term/modes~    | 38-entry mode table (DECSET / DECRST)         |
+| ~canary/term/write~    | Direct cell write helpers (used by replay)    |
+| ~canary/term/render~   | ~term-diff->ansi~ output emitter              |
+| ~canary/term/selection~| Selection rectangles, copy mode helpers       |
+| ~canary/term/snapshot~ | Golden-file snapshot helpers for tests        |
+| ~canary/term/base64~   | OSC 52 clipboard payload encoding             |
+| ~canary/term/color~    | Colour formats: indexed, RGB, name resolution |
+
+** Op records as dispatch targets
+
+The parser emits op records rather than calling mutation
+procedures directly. Dispatch is a method on the op class. That
+lets callers intercept emulator decisions from the REPL by
+specialising on the op:
+
+#+begin_src scheme
+(define-method (update self (op <op-set-mode>))
+  ;; observe or override mode-set decisions live
+  ...)
+#+end_src
+
+Same shape as msg dispatch on the app side. The emulator is just
+another consumer of multi-method polymorphism.
+
+** Entry points
+
+- ~make-term~, ~term-process-output!~, ~term-process-bytes!~
+- ~view->grid~ : render a view tree into a fresh ~<term>~ for
+  comparison
+- ~term->text-snapshot~, ~term->ansi-snapshot~ : golden files
+- ~replay-ansi~ : parse a recorded byte stream
+- ~mode-get~ / ~mode-set!~ : poke individual VT modes
+
+* Faces, theme, palette
+:PROPERTIES:
+:CUSTOM_ID: faces-theme-palette
+:END:
+
+Colour and style are decoupled: face attrs reference colour by
+name; the active palette resolves names to bytes at SGR time.
+
+#+begin_src mermaid
+graph LR
+    subgraph "View tree"
+        TXT["(txt s #:fg 'accent #:bold)"]
+        FACE["<face-attrs> fg='accent bold=#t"]
+    end
+
+    subgraph "Theme"
+        ACT[Active palette name]
+        PALS["palettes: dark / light / dusk"]
+        ENTRY["(accent . #ffd05e)"]
+    end
+
+    subgraph "SGR emission"
+        RES[Resolve 'accent in active]
+        FALL[Fall back to default palette]
+        RGB["RGB value -> SGR 38;2;r;g;b"]
+    end
+
+    TXT --> FACE
+    FACE --> RES
+    ACT --> PALS
+    PALS --> ENTRY
+    ENTRY --> RES
+    RES -->|not present| FALL
+    FALL --> ENTRY
+    RES --> RGB
+    RGB --> BYTES["bytes into diff stream"]
+#+end_src
+
+** Resolution rules
+
+- Each palette is a name -> hex colour map.
+- Faces store either a name symbol or a literal hex string. Names
+  resolve through the active palette; literals pass through
+  unchanged.
+- A name missing from the active palette falls back to the
+  default (first declared) palette.
+- ~cycle-palette~ rotates by declaration order. ~set-palette~
+  takes a specific name. The engine tracks every registered
+  palette so users do not maintain a list.
+
+** Dynamic theme swap
+
+Theme changes are a single cmd:
+
+1. ~(cycle-palette)~ or ~(set-palette 'light)~ in any ~update~.
+2. Cmd handler mutates ~engine-theme~.
+3. Next frame's ~view~ produces the same tree; the renderer
+   resolves names against the new palette.
+4. ~term-diff->ansi~ emits the changed SGRs as part of the
+   ordinary diff.
+
+There is no per-widget theme propagation step: widgets only ever
+referenced names.
+
+** Why no per-app default background
+
+Most TUI surfaces want to draw their own background. canary
+leaves cells with no explicit ~#:bg~ at the terminal default
+(SGR 49) so a host terminal's background shows through. Apps that
+want a solid background use ~fill~ at the root of their view.
+
+* Focus and keymap dispatch
+:PROPERTIES:
+:CUSTOM_ID: focus-and-keymap-dispatch
+:END:
+
+A key takes one of three paths through the engine.
+
+#+begin_src mermaid
+graph TD
+    KEY["<key> from input"] --> SCOPED{Scoped match?}
+    SCOPED -->|yes| ACT["fire action symbol"]
+    SCOPED -->|no| GLOB{Global match?}
+    GLOB -->|yes| ACT
+    GLOB -->|no| RAW["raw key -> focused widget update"]
+
+    ACT --> CASCADE["broadcast action through tree"]
+    RAW --> LEAFROOT["leaf-to-root through focus chain"]
+
+    style SCOPED fill:#1d3557
+    style GLOB fill:#1d3557
+    style ACT fill:#2d6a4f
+    style RAW fill:#9d0208
+#+end_src
+
+** Three levels
+
+| level   | where it lives                                  | use for                                  |
+|---------+-------------------------------------------------+------------------------------------------|
+| global  | ~engine-keymap~ slot, set via ~run-app #:keymap~ | app-wide binds: quit, ctrl-c            |
+| scoped  | ~with-keymap~ wrapper in the view tree           | scene binds, modal overlays, per-pane    |
+| raw     | focused widget's ~update (msg <key>)~ method     | typing, inline nav (textinput, menu)     |
+
+Dispatch order on a key:
+
+1. Engine collects scoped keymaps from ~with-keymap~ wrappers
+   along the focus path AND inside the focused widget's own view
+   (innermost first).
+2. Stack walks top-down: scoped innermost, scoped outermost,
+   then engine global. First match fires its action symbol as a
+   cascade msg; the raw key is consumed.
+3. If nothing matches, the raw key routes down the focus chain to
+   the focused widget's ~update (msg <key>)~ method.
+
+** Modal overlay shape
+
+A pause menu opens by setting a slot. The scene's ~view~ swaps
+the active scoped keymap based on whether that slot is set:
+
+#+begin_src scheme
+(define-method (view (c <canvas>))
+  (with-keymap (if (canvas-pause-menu c) %pause-km %canvas-km)
+    (vbox (map-view c)
+          (and (canvas-pause-menu c) (canvas-pause-menu c)))))
+#+end_src
+
+The wrapper vanishing from the tree de-scopes the keymap. No
+push / pop bookkeeping; the structure of the tree is the
+structure of the keymap stack.
+
+** Chord state
+
+Multi-key chords (~(bind #\g #\g 'top)~) hold partial state on
+the engine, not on the scoped wrapper. Scoped wrappers are
+rebuilt every frame, so chord state would not survive a render.
+Chord-bearing binds belong on the global keymap.
+
+* Subscriptions and lifecycle
+:PROPERTIES:
+:CUSTOM_ID: subscriptions-and-lifecycle
+:END:
+
+A widget gets ~<mount>~ when it appears in the view tree and
+~<unmount>~ when it leaves. ~<init>~ fires once per app at
+startup. The engine tracks mount state by widget identity
+(~eq?~), so re-using the same instance across frames keeps it
+mounted.
+
+** every / after
+
+#+begin_src scheme
+(every #:hz 10 #:id (list 'spin self) (lambda () (tick)))
+(after #:ms 500 #:id 'flash         (lambda () 'unflash))
+#+end_src
+
+Both spawn a fiber. The thunk's return value becomes a msg on
+the queue. ~#:id~ keys the sub for cancellation; re-issuing the
+same id is idempotent (the engine spawns once).
+
+When the issuing widget leaves the view tree, the engine cancels
+every sub tagged with that widget. Cancellation is automatic for
+the common case; users almost never call ~cancel~ explicitly.
+
+** Cmd taxonomy
+
+| cmd                                  | effect                                       |
+|--------------------------------------+----------------------------------------------|
+| ~#f~                                 | no-op                                         |
+| ~'quit~                              | exit ~run-app~                                |
+| ~(batch c1 c2 ...)~                  | run in parallel                               |
+| ~(sequence c1 c2 ...)~               | run sequentially, await each                  |
+| ~(every #:hz N [#:id k] producer)~   | persistent ticker                             |
+| ~(every #:ms N [#:id k] producer)~   | same                                          |
+| ~(after #:ms N [#:id k] producer)~   | one-shot timer                                |
+| ~(cancel id)~                        | stop a sub by id                              |
+| ~(println "string" ...)~             | line to scrollback above alt-screen           |
+| ~(set-title "name")~                 | runtime OS title change                       |
+| ~(clear-screen)~                     | force full repaint                            |
+| ~(cursor 'hidden /-visible/-bar/...)~| runtime cursor change                         |
+| ~(alt-screen 'on/-off)~              | toggle alt screen                             |
+| ~(mouse-mode 'off/-click/-cell/-all)~| toggle mouse reporting                        |
+| ~(set-palette 'name)~                | switch active palette                         |
+| ~(cycle-palette)~                    | next palette in theme order                   |
+| ~(suspend)~                          | hand tty to shell, resume on SIGCONT          |
+| ~(exec "cmd args" #:on-done thunk)~  | tear down, run process, restore, msg back     |
+| ~(focus widget)~                     | route raw keys to this widget's chain         |
+| user thunk                           | engine spawns fiber; return value is a msg    |
+
+* Live coding via REPL
+:PROPERTIES:
+:CUSTOM_ID: live-coding-via-repl
+:END:
+
+This is canary's counterpart to TUIOS's SSH section: how
+external clients reach a running instance.
+
+#+begin_src mermaid
+graph TB
+    subgraph "Editors / clients"
+        E1[Emacs / Geiser]
+        E2[telnet]
+        E3[any nrepl-like tool]
+    end
+
+    subgraph "Running canary app"
+        REPL["Guile TCP REPL :37147"]
+        IMG[Live image: classes, methods, vars]
+        ENG[Running engine]
+        TREE[Current view tree]
+    end
+
+    E1 -->|TCP| REPL
+    E2 -->|TCP| REPL
+    E3 -->|TCP| REPL
+
+    REPL --> IMG
+    IMG --> ENG
+    IMG --> TREE
+    ENG -->|next frame uses new methods| TREE
+
+    style REPL fill:#457b9d
+    style IMG fill:#1d3557
+#+end_src
+
+** Hot reload rules
+
+- *Re-evaluating ~define-method~:* method redefinition replaces
+  the body in place. The next render or next dispatch picks up
+  the new body.
+- *Re-evaluating ~define-class~:* Guile runs the class
+  redefinition protocol. Existing instances migrate to the new
+  slot layout; default values fill new slots.
+- *Re-evaluating a theme form:* swap the engine's theme. Next
+  frame recolours.
+- *Re-evaluating a layout helper:* next call sees the new body.
+  Helpers used in cached ~static~ subtrees need a
+  ~(clear-screen)~ to repopulate the cache.
+
+** REPL access
+
+~make repl~ runs ~guile -L . --listen=37147~, exposing a TCP
+REPL on port 37147. Any client speaking Guile's REPL protocol
+can connect: Geiser, ~telnet localhost 37147~, custom tooling.
+
+There is no per-session isolation as in TUIOS / wish: the REPL
+is the same image the engine runs in, so REPL evaluations
+mutate the live engine. That is the design goal, not a
+limitation: edit your app while it runs.
+
+** Tests against the same model
+
+Because ~<term>~ is both the renderer's write target and the
+emulator's parse target, tests have one model to assert
+against:
+
+#+begin_src scheme
+(let ((t (view->grid (vbox (txt "hello") (txt "world"))
+                     #:width 20 #:height 5)))
+  (term->text-snapshot t))
+;; => "hello               \nworld               \n..."
+#+end_src
+
+Or feed a byte stream through the parser and assert on the same
+shape:
+
+#+begin_src scheme
+(let ((t (make-term 80 24)))
+  (term-process-bytes! t #vu8(...))
+  (term->ansi-snapshot t))
+#+end_src
+
+* Core modules
+:PROPERTIES:
+:CUSTOM_ID: core-modules
+:END:
+
+| module                          | file                              | purpose                                                       |
+|---------------------------------+-----------------------------------+---------------------------------------------------------------|
+| ~(canary)~                      | ~canary.scm~                      | umbrella re-export module; the only import most apps need     |
+| ~(canary engine)~               | ~canary/engine.scm~               | event loop, msg dispatch, cmd execution, subscriptions        |
+| ~(canary engine-types)~         | ~canary/engine-types.scm~         | ~<engine>~ record, accessor / setter pairs                    |
+| ~(canary widget)~               | ~canary/widget.scm~               | ~<focusable>~ base class, ~widget-id~, ~update-slots~         |
+| ~(canary protocol)~             | ~canary/protocol.scm~             | msg classes, cmd ctors, batch / sequence / focus / cancel     |
+| ~(canary view)~                 | ~canary/view.scm~                 | ~view~ + ~update~ generics, global catch-all, cascade walker  |
+| ~(canary layout)~               | ~canary/layout.scm~               | layout records: vbox, hbox, pad, align, flex, wrap, pin, ...  |
+| ~(canary borders)~              | ~canary/borders.scm~              | ~<border>~ + ascii / normal / rounded / thick / double        |
+| ~(canary draw)~                 | ~canary/draw.scm~                 | low-level draw cmd records                                    |
+| ~(canary render)~               | ~canary/render.scm~               | tree -> draw cmds, view->cmds, wrap-paragraph                 |
+| ~(canary faces)~                | ~canary/faces.scm~                | ~<face-attrs>~, style flag handling                           |
+| ~(canary theme)~                | ~canary/theme.scm~                | palettes, theme-set!, cycle-palette, default-theme            |
+| ~(canary key)~                  | ~canary/key.scm~                  | ~<key>~ record, modifier canonicalisation                     |
+| ~(canary keymap)~               | ~canary/keymap.scm~               | global keymap, chord state                                    |
+| ~(canary keymap-input)~         | ~canary/keymap-input.scm~         | scoped keymap node, dispatch stack walk                       |
+| ~(canary input)~                | ~canary/input.scm~                | raw byte to msg decoder; CSI u, paste, mouse, focus reports   |
+| ~(canary backend)~              | ~canary/backend.scm~              | backend generic interface                                     |
+| ~(canary backend-ansi)~         | ~canary/backend-ansi.scm~         | ANSI backend; tty init / shutdown, ~cur-term~ / ~prev-term~   |
+| ~(canary backend-test)~         | ~canary/backend-test.scm~         | headless backend for tests                                    |
+| ~(canary terminal)~             | ~canary/terminal.scm~             | tty open, raw mode, restore                                   |
+| ~(canary image)~                | ~canary/image.scm~                | image registry for kitty-graphics                             |
+| ~(canary spring)~               | ~canary/spring.scm~               | damped harmonic oscillator for animation                      |
+| ~(canary width)~                | ~canary/width.scm~                | wcwidth-aware char / string column width                      |
+| ~(canary term)~                 | ~canary/term.scm~                 | umbrella for the emulator submodules                          |
+| ~(canary term *)~               | ~canary/term/*.scm~               | parser, dispatch, ops, modes, SGR, render, snapshot           |
+| ~(canary components button)~    | ~canary/components/button.scm~    | ~<button>~ widget                                             |
+| ~(canary components panel)~     | ~canary/components/panel.scm~     | ~<panel>~ widget: title, border, footer, content              |
+| ~(canary components textinput)~ | ~canary/components/textinput.scm~ | ~<textinput>~ widget: single-line input with cursor           |
+| ~(canary components spinner)~   | ~canary/components/spinner.scm~   | ~<spinner>~ widget with self-installed ticker                 |
+| ~(canary components progress)~  | ~canary/components/progress.scm~  | ~<progress>~ bar widget                                       |
+| ~(canary components paginator)~ | ~canary/components/paginator.scm~ | ~<paginator>~ page indicator                                  |
+| ~(canary components viewport)~  | ~canary/components/viewport.scm~  | ~<viewport>~ scrollable list with tail-mode                   |
+| ~(canary components menu)~      | ~canary/components/menu.scm~      | ~<menu>~ widget: focus, hotkeys, on-click rows                |
+
+** Naming conventions
+
+Uniform across the library:
+
+- ~<thing>~ is the class or record type
+- ~thing~ is the constructor (no ~make-~ prefix)
+- ~thing?~ is the predicate
+- ~thing-field~ is the accessor
+
+Applies to engine plumbing (~(engine #:backend ...)~,
+~(ansi-backend #:port ...)~) and spring helpers
+(~(spring-animation ...)~, ~(spring-bouncy)~) too.
+
+* Terminal capabilities
+
+~backend-init~ enables the following modes; ~backend-shutdown~
+restores them in reverse order.
+
+| escape         | mode                                                                |
+|----------------+---------------------------------------------------------------------|
+| ~\e[?1049h~    | alternate screen buffer                                              |
+| ~\e[?25l~      | hide cursor                                                          |
+| ~\e[?1004h~    | focus reporting (emits ~<focus>~ / ~<blur>~)                         |
+| ~\e[?2004h~    | bracketed paste (emits ~<paste>~ with ~paste-text~)                   |
+| ~\e[>5u~       | kitty keyboard protocol, flags 1 + 4 (disambiguate + alternate keys) |
+
+Each frame's cell diff is bracketed by ~\e[?2026h~ ... ~\e[?2026l~
+(synchronized output) so terminals that honour it never paint a
+half-written frame.
+
+Mouse reporting is opt-in via the ~#:mouse~ kwarg on ~run-app~
+(~'click~ / ~'cell~ / ~'all~). Kitty graphics support is
+capability-probed at init; the renderer falls back to text views
+when the host does not speak the protocol.
+
+* Related documentation
+
+- =DESIGN.md= : authoring reference: msgs, cmds, layout, theme,
+  focus, anti-patterns
+- =canary/= : module sources; small enough to read directly
+- =canary/components/= : worked examples of widgets that
+  participate in the cascade
+- =examples/= : counter, chat, dired-lite, canary-tweet
+- =tests/= : snapshot and dispatch tests against the same
+  ~<term>~ model the renderer writes into
