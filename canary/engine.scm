@@ -17,7 +17,7 @@
                                             clear-log resumed
                                             focus focus? focus-target
                                             cancel cancel? cancel-id))
-  #:use-module ((canary key) #:select (key-event key=?))
+  #:use-module ((canary key) #:select (<key> key-sym key-mods key-event key=?))
   #:use-module (canary input)
   #:use-module (canary backend)
   #:use-module (canary backend-ansi)
@@ -921,9 +921,36 @@ match.  Returns #t if anything changed."
      (action (dispatch! eng cascade! (apply-filter eng action)))
      (else   (dispatch! eng route-to-focus! (apply-filter eng msg))))))
 
+(define (key-already-held? eng msg)
+  "Return #t if MSG's key is already in the held-set with no
+intervening release.  Terminals like alacritty accept the kitty-kbd
+flag-2 push but don't actually report event types — OS auto-repeats
+arrive as identical 'press events.  Treating a press of a held key
+as a repeat keeps the menu and other widgets that filter on 'press
+from cycling per auto-repeat."
+  (list/any (lambda (entry) (key=? (car entry) msg))
+            (engine-held-keys eng)))
+
 (define (handle-key-press! eng msg)
   "Chord-aware press handling.  Returns whether anything changed."
   (prune-held! eng)
+  (cond
+   ((key-already-held? eng msg)
+    ;; Refresh the held timestamp so the entry doesn't prune mid-hold,
+    ;; then route through the repeat path: clears any pending defer
+    ;; (the user has committed) and dispatches with event=repeat so
+    ;; widgets see the same shape as a kitty-reported repeat.
+    (add-to-held! eng msg)
+    (clear-pending! eng)
+    (let ((rep (make <key>
+                 #:sym   (key-sym msg)
+                 #:mods  (key-mods msg)
+                 #:event 'repeat)))
+      (dispatch-keymap-or-raw! eng rep)))
+   (else
+    (handle-key-press-fresh! eng msg))))
+
+(define (handle-key-press-fresh! eng msg)
   (add-to-held! eng msg)
   (let ((held (held-syms-of eng)))
     (cond
